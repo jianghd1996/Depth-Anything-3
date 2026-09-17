@@ -3,7 +3,13 @@
 from depth_anything_3.world_model.orbit import (
     estimate_orbit_pivot,
     generate_orbit_trajectory,
+    generate_translation_trajectory,
     render_orbit,
 )
 
-__all__ = ["estimate_orbit_pivot", "generate_orbit_trajectory", "render_orbit"]
+__all__ = [
+    "estimate_orbit_pivot",
+    "generate_orbit_trajectory",
+    "generate_translation_trajectory",
+    "render_orbit",
+]

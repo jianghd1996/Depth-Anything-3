@@ -154,3 +154,41 @@ angle to resume from `orbit_state.json`. Each step has its own geometry and
 generated video directory. On completion, outbound halves are assembled into
 `orbit_360.mp4`; the individual round-trip videos remain available for quality
 inspection.
+
+## Task 4: fixed-geometry horizontal translation diagnostic
+
+`run_iterative_translation.py` removes both orbit-center estimation and
+multi-view DA3 feedback from the experiment. DA3 runs once on the original
+image, then the same Gaussian scene and original camera coordinate system are
+used for every segment. The camera orientation stays fixed throughout.
+
+The default test has three steps to camera-right followed by three steps back:
+
+- Each outbound segment uses a round trip from the current offset to the next
+  offset and back. Its middle generated frame becomes the next known view.
+- Each return segment is one-way and uses the previously saved adjacent view as
+  its tail-frame constraint. The final return segment therefore uses the
+  original input as its tail frame.
+- One step is `0.08 * robust center depth` by default. This is independent of
+  DA3's absolute scene scale and can be changed with `--shift-ratio`.
+- DA3-generated geometry is stored once under `geometry/`; resume runs do not
+  estimate depth or pose again.
+
+Run the full right-and-back diagnostic:
+
+```bash
+PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
+python scripts/world_model/run_iterative_translation.py
+```
+
+It is safer to inspect the first two outbound segments before running all six
+VideoX-Fun calls:
+
+```bash
+PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
+python scripts/world_model/run_iterative_translation.py --max-steps-this-run 2
+```
+
+Repeat the full command to resume. The final continuous preview is written to
+`output/translation_right_roundtrip/translation_roundtrip.mp4`. Use a new
+`--output-dir` when changing the number of segments or shift ratio.

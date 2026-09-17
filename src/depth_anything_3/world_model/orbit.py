@@ -158,6 +158,47 @@ def generate_orbit_trajectory(
     return affine_inverse(c2ws)
 
 
+def generate_translation_trajectory(
+    start_extrinsic: np.ndarray | torch.Tensor,
+    start_distance: float,
+    end_distance: float,
+    num_frames: int = 81,
+    direction: Literal["left", "right"] = "right",
+    ease: bool = True,
+    return_to_start: bool = False,
+) -> torch.Tensor:
+    """Translate a camera horizontally without changing its orientation.
+
+    Distances are absolute offsets from the original camera along its local X
+    axis.  This keeps every segment in one global frame instead of accumulating
+    an estimated pose.  A round-trip reaches ``end_distance`` at the middle
+    frame and then retraces the same path.
+    """
+
+    if num_frames < 2:
+        raise ValueError(f"num_frames must be at least 2, got {num_frames}")
+    if direction not in ("left", "right"):
+        raise ValueError(f"direction must be 'left' or 'right', got {direction!r}")
+
+    start_w2c = torch.as_tensor(start_extrinsic, dtype=torch.float32)
+    base_c2w = affine_inverse(as_homogeneous(start_w2c))
+    progress = torch.linspace(0.0, 1.0, num_frames, device=base_c2w.device)
+    if return_to_start:
+        progress = 1.0 - torch.abs(2.0 * progress - 1.0)
+    if ease:
+        progress = 0.5 - 0.5 * torch.cos(progress * math.pi)
+
+    distances = start_distance + progress * (end_distance - start_distance)
+    sign = 1.0 if direction == "right" else -1.0
+    right_axis = _normalize(base_c2w[:3, 0])
+    c2ws = base_c2w.unsqueeze(0).repeat(num_frames, 1, 1)
+    c2ws[:, :3, 3] = (
+        base_c2w[:3, 3].unsqueeze(0)
+        + sign * distances[:, None] * right_axis.unsqueeze(0)
+    )
+    return affine_inverse(c2ws)
+
+
 @torch.inference_mode()
 def render_orbit(
     prediction: Prediction,
