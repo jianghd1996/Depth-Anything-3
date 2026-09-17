@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""Generate a high-quality view-expansion video from DA3 geometry guidance."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+import torch
+from diffusers import FlowMatchEulerDiscreteScheduler
+from omegaconf import OmegaConf
+from PIL import Image
+from safetensors.torch import load_file
+from transformers import AutoTokenizer
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parents[1]
+DEFAULT_WORLD_ROOT = Path("/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev")
+DEFAULT_MODEL_PATH = Path(
+    "/home/z00566689/dev/mnt/SingleRecon/Cloud_Models/Wan2.2-Fun-5B-Control"
+)
+DEFAULT_LORA_PATH = DEFAULT_MODEL_PATH / "33000_lora.safetensors"
+DEFAULT_NEGATIVE_PROMPT = (
+    "色调艳丽，过曝，静态，细节模糊不清，字幕，整体发灰，最差质量，低质量，"
+    "JPEG压缩残留，丑陋，残缺，变形，扭曲，杂乱的背景，闪烁，颜色漂移"
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    geometry_dir = DEFAULT_WORLD_ROOT / "output/task1_orbit_roundtrip_10"
+    parser.add_argument("--image", type=Path, default=DEFAULT_WORLD_ROOT / "image.jpg")
+    parser.add_argument("--prompt", type=Path, default=DEFAULT_WORLD_ROOT / "prompt.txt")
+    parser.add_argument("--control-video", type=Path, default=geometry_dir / "gs_render.mp4")
+    parser.add_argument("--control-mask", type=Path, default=geometry_dir / "mask.mp4")
+    parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--lora-path", type=Path, default=DEFAULT_LORA_PATH)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=SCRIPT_DIR / "configs/wan_civitai_5b.yaml",
+    )
+    parser.add_argument(
+        "--videox-fun-root",
+        type=Path,
+        help=(
+            "VideoX-Fun source checkout. Optional when videox_fun is already importable; "
+            "VIDEOX_FUN_ROOT and a sibling ../VideoX-Fun checkout are also detected."
+        ),
+    )
+    parser.add_argument("--output", type=Path, default=geometry_dir / "generated.mp4")
+    parser.add_argument("--frames", type=int, default=81)
+    parser.add_argument("--fps", type=int, default=24)
+    parser.add_argument("--steps", type=int, default=8)
+    parser.add_argument("--guidance-scale", type=float, default=6.0)
+    parser.add_argument("--lora-weight", type=float, default=1.0)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--shift", type=float, default=5.0)
+    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--dtype", choices=("bfloat16", "float16"), default="bfloat16")
+    parser.add_argument("--height", type=int)
+    parser.add_argument("--width", type=int)
+    parser.add_argument("--negative-prompt", default=DEFAULT_NEGATIVE_PROMPT)
+    return parser.parse_args()
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    for name in ("image", "prompt", "control_video", "control_mask", "lora_path", "config"):
+        path = getattr(args, name)
+        if not path.is_file():
+            raise FileNotFoundError(f"--{name.replace('_', '-')} does not exist: {path}")
+    if not args.model_path.is_dir():
+        raise FileNotFoundError(f"--model-path does not exist: {args.model_path}")
+    if (args.frames - 1) % 4:
+        raise ValueError("--frames must satisfy (frames - 1) % 4 == 0; use 81 by default")
+    if (args.height is None) != (args.width is None):
+        raise ValueError("--height and --width must be provided together")
+    if args.height is not None and (args.height % 16 or args.width % 16):
+        raise ValueError("--height and --width must both be divisible by 16")
+
+
+def configure_videox_fun_import(explicit_root: Path | None) -> Path | None:
+    candidates = []
+    if explicit_root is not None:
+        candidates.append(explicit_root)
+    env_root = os.environ.get("VIDEOX_FUN_ROOT")
+    if env_root:
+        candidates.append(Path(env_root))
+    if not candidates and importlib.util.find_spec("videox_fun") is not None:
+        return None
+    candidates.append(REPO_ROOT.parent / "VideoX-Fun")
+
+    for candidate in candidates:
+        candidate = candidate.expanduser().resolve()
+        if (candidate / "videox_fun").is_dir():
+            sys.path.insert(0, str(candidate))
+            return candidate
+    raise ModuleNotFoundError(
+        "Could not import videox_fun. Pass --videox-fun-root /path/to/VideoX-Fun "
+        "or set VIDEOX_FUN_ROOT. Use VideoX-Fun main at commit 18b9b78 or newer."
+    )
+
+
+def choose_output_size(image_path: Path) -> tuple[int, int]:
+    """Return (height, width) using the established 1088-short-side buckets."""
+    with Image.open(image_path) as image:
+        width, height = image.size
+    ratio = min(width, height) / max(width, height)
+    long_side = 1440 if ratio > 0.70 else 1600 if ratio > 0.65 else 1920
+    if width <= height:
+        return long_side, 1088
+    return 1088, long_side
+
+
+def video_info(path: Path) -> tuple[int, int, int]:
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {path}")
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    return width, height, frames
+
+
+def load_missing_region_mask(
+    path: Path, frames: int, height: int, width: int
+) -> torch.Tensor:
+    """Read DA3's white-valid/black-missing video as a 1=missing tensor."""
+    cap = cv2.VideoCapture(str(path))
+    masks: list[np.ndarray] = []
+    while len(masks) < frames:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, (width, height), interpolation=cv2.INTER_NEAREST)
+        masks.append((gray < 128).astype(np.float32))
+    cap.release()
+    if len(masks) != frames:
+        raise ValueError(f"Control mask has {len(masks)} readable frames; expected {frames}")
+    return torch.from_numpy(np.stack(masks)).unsqueeze(0).unsqueeze(0)
+
+
+def expand_and_load_patch_embedding(transformer, state_dict: dict[str, torch.Tensor]) -> dict:
+    patch_state = {
+        key.removeprefix("patch_embedding."): value
+        for key, value in state_dict.items()
+        if key.startswith("patch_embedding.")
+    }
+    if "weight" not in patch_state:
+        raise RuntimeError(
+            "The LoRA checkpoint has no patch_embedding.weight. The mask-aware Control "
+            "checkpoint must include the expanded Conv3d weights."
+        )
+
+    old = transformer.patch_embedding
+    target_in_channels = int(patch_state["weight"].shape[1])
+    if old.in_channels != target_in_channels:
+        expanded = torch.nn.Conv3d(
+            target_in_channels,
+            old.out_channels,
+            kernel_size=old.kernel_size,
+            stride=old.stride,
+            padding=old.padding,
+            dilation=old.dilation,
+            groups=old.groups,
+            bias=old.bias is not None,
+            padding_mode=old.padding_mode,
+        ).to(device=old.weight.device, dtype=old.weight.dtype)
+        with torch.no_grad():
+            copied_channels = min(old.in_channels, target_in_channels)
+            expanded.weight.zero_()
+            expanded.weight[:, :copied_channels].copy_(old.weight[:, :copied_channels])
+            if old.bias is not None:
+                expanded.bias.copy_(old.bias)
+        transformer.patch_embedding = expanded
+        transformer.in_dim = target_in_channels
+        print(f"Expanded patch_embedding: {old.in_channels} -> {target_in_channels} channels")
+
+    missing, unexpected = transformer.patch_embedding.load_state_dict(patch_state, strict=True)
+    if missing or unexpected:
+        raise RuntimeError(
+            f"patch_embedding load mismatch: missing={missing}, unexpected={unexpected}"
+        )
+    return {key: value for key, value in state_dict.items() if not key.startswith("patch_embedding.")}
+
+
+def main() -> None:
+    args = parse_args()
+    validate_args(args)
+    detected_root = configure_videox_fun_import(args.videox_fun_root)
+
+    from videox_fun.models import (
+        AutoencoderKLWan,
+        AutoencoderKLWan3_8,
+        Wan2_2Transformer3DModel,
+        WanT5EncoderModel,
+    )
+    from videox_fun.pipeline import Wan2_2FunControlPipeline
+    from videox_fun.utils.lora_utils import merge_lora
+    from videox_fun.utils.utils import (
+        filter_kwargs,
+        get_image_to_video_latent,
+        get_video_to_video_latent,
+        save_videos_grid,
+    )
+
+    import inspect
+
+    if "control_mask" not in inspect.signature(Wan2_2FunControlPipeline.__call__).parameters:
+        raise RuntimeError(
+            "This VideoX-Fun checkout predates mask-aware Control inference. "
+            "Use main commit 18b9b78 or newer."
+        )
+
+    config = OmegaConf.load(args.config)
+    dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
+    height, width = (
+        (args.height, args.width)
+        if args.height is not None
+        else choose_output_size(args.image)
+    )
+    control_width, control_height, control_frames = video_info(args.control_video)
+    _, _, mask_frames = video_info(args.control_mask)
+    if control_frames < args.frames or mask_frames < args.frames:
+        raise ValueError(
+            f"Need {args.frames} guidance frames, got control={control_frames}, mask={mask_frames}"
+        )
+    print(
+        f"Guidance: {control_width}x{control_height}, {args.frames} frames; "
+        f"generation: {width}x{height}"
+    )
+
+    transformer_subpath = config.transformer_additional_kwargs.get(
+        "transformer_low_noise_model_subpath", "transformer"
+    )
+    transformer = Wan2_2Transformer3DModel.from_pretrained(
+        str(args.model_path / transformer_subpath),
+        transformer_additional_kwargs=OmegaConf.to_container(
+            config.transformer_additional_kwargs
+        ),
+        low_cpu_mem_usage=True,
+        torch_dtype=dtype,
+    )
+
+    lora_state = load_file(str(args.lora_path), device="cpu")
+    lora_state = expand_and_load_patch_embedding(transformer, lora_state)
+
+    vae_class = {
+        "AutoencoderKLWan": AutoencoderKLWan,
+        "AutoencoderKLWan3_8": AutoencoderKLWan3_8,
+    }[config.vae_kwargs.get("vae_type", "AutoencoderKLWan")]
+    vae = vae_class.from_pretrained(
+        str(args.model_path / config.vae_kwargs.get("vae_subpath", "vae")),
+        additional_kwargs=OmegaConf.to_container(config.vae_kwargs),
+    ).to(dtype)
+    tokenizer = AutoTokenizer.from_pretrained(
+        str(args.model_path / config.text_encoder_kwargs.get("tokenizer_subpath", "tokenizer"))
+    )
+    text_encoder = WanT5EncoderModel.from_pretrained(
+        str(args.model_path / config.text_encoder_kwargs.get("text_encoder_subpath", "text_encoder")),
+        additional_kwargs=OmegaConf.to_container(config.text_encoder_kwargs),
+        low_cpu_mem_usage=True,
+        torch_dtype=dtype,
+    ).eval()
+    scheduler = FlowMatchEulerDiscreteScheduler(
+        **filter_kwargs(
+            FlowMatchEulerDiscreteScheduler,
+            OmegaConf.to_container(config.scheduler_kwargs),
+        )
+    )
+    pipeline = Wan2_2FunControlPipeline(
+        transformer=transformer,
+        transformer_2=None,
+        vae=vae,
+        tokenizer=tokenizer,
+        text_encoder=text_encoder,
+        scheduler=scheduler,
+    )
+    pipeline = merge_lora(
+        pipeline,
+        str(args.lora_path),
+        args.lora_weight,
+        device=args.device,
+        dtype=dtype,
+        state_dict=lora_state,
+    )
+    pipeline.to(device=args.device)
+    print("VideoX-Fun loaded in model_full_load mode")
+
+    prompt = args.prompt.read_text(encoding="utf-8").strip()
+    start_end_image = Image.open(args.image).convert("RGB")
+    inpaint_video, inpaint_mask, _ = get_image_to_video_latent(
+        [start_end_image],
+        [start_end_image.copy()],
+        video_length=args.frames,
+        sample_size=[height, width],
+    )
+    control_video, _, _, _ = get_video_to_video_latent(
+        str(args.control_video),
+        video_length=args.frames,
+        sample_size=[height, width],
+        fps=args.fps,
+        ref_image=None,
+    )
+    control_mask = load_missing_region_mask(
+        args.control_mask, args.frames, height, width
+    )
+    generator = torch.Generator(device=args.device).manual_seed(args.seed)
+    boundary = config.transformer_additional_kwargs.get("boundary", 0.875)
+
+    with torch.inference_mode():
+        sample = pipeline(
+            prompt,
+            num_frames=args.frames,
+            negative_prompt=args.negative_prompt,
+            height=height,
+            width=width,
+            generator=generator,
+            guidance_scale=args.guidance_scale,
+            num_inference_steps=args.steps,
+            video=inpaint_video,
+            mask_video=inpaint_mask,
+            control_video=control_video,
+            control_mask=control_mask,
+            boundary=boundary,
+            shift=args.shift,
+        ).videos
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    save_videos_grid(sample.cpu(), str(args.output), fps=args.fps)
+    metadata = {
+        "image": str(args.image),
+        "prompt_file": str(args.prompt),
+        "control_video": str(args.control_video),
+        "control_mask": str(args.control_mask),
+        "model_path": str(args.model_path),
+        "lora_path": str(args.lora_path),
+        "videox_fun_root": None if detected_root is None else str(detected_root),
+        "output": str(args.output),
+        "frames": args.frames,
+        "resolution": [height, width],
+        "steps": args.steps,
+        "guidance_scale": args.guidance_scale,
+        "lora_weight": args.lora_weight,
+        "seed": args.seed,
+        "endpoint_constraint": "same known input image at first and last frame",
+        "control_mask_convention": "1 = missing DA3 geometry, 0 = valid geometry",
+        "memory_mode": "model_full_load",
+    }
+    args.output.with_suffix(".json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"Done. Generated video: {args.output}")
+
+
+if __name__ == "__main__":
+    main()

@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=Path(
-            "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/output/task1_orbit_90"
+            "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/output/task1_orbit_roundtrip_10"
         ),
     )
     parser.add_argument(
@@ -57,7 +57,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--process-res", type=int, default=504)
     parser.add_argument("--frames", type=int, default=81)
-    parser.add_argument("--degrees", type=float, default=90.0)
+    parser.add_argument("--degrees", type=float, default=10.0)
+    parser.add_argument(
+        "--trajectory-mode",
+        choices=("round-trip", "one-way"),
+        default="round-trip",
+        help=(
+            "round-trip rotates to the requested angle and returns to the input view, "
+            "so the known image can constrain both endpoint frames."
+        ),
+    )
     parser.add_argument("--direction", choices=("left", "right"), default="right")
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--chunk-size", type=int, default=4)
@@ -174,6 +183,7 @@ def main() -> None:
         num_frames=args.frames,
         degrees=args.degrees,
         direction=args.direction,
+        return_to_start=args.trajectory_mode == "round-trip",
     )
     output_hw = None
     if args.output_height is not None:
@@ -220,6 +230,8 @@ def main() -> None:
         "model_name": args.model_name,
         "frames": args.frames,
         "degrees": args.degrees,
+        "trajectory_mode": args.trajectory_mode,
+        "peak_view_frame": args.frames // 2 if args.trajectory_mode == "round-trip" else args.frames - 1,
         "direction": args.direction,
         "fps": args.fps,
         "process_resolution": args.process_res,

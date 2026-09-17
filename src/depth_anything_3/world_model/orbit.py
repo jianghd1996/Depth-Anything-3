@@ -97,15 +97,19 @@ def generate_orbit_trajectory(
     start_extrinsic: np.ndarray | torch.Tensor,
     pivot_world: np.ndarray | torch.Tensor,
     num_frames: int = 81,
-    degrees: float = 90.0,
+    degrees: float = 10.0,
     direction: Literal["left", "right"] = "right",
     ease: bool = True,
+    return_to_start: bool = False,
 ) -> torch.Tensor:
     """Generate an OpenCV world-to-camera orbit that preserves initial framing.
 
     The camera center and its orientation are rotated by the same world-space
     transform around the camera's initial up axis.  Consequently frame zero is
-    exactly the DA3 input camera and there is no initial look-at snap.
+    exactly the DA3 input camera and there is no initial look-at snap.  When
+    ``return_to_start`` is true, the trajectory reaches ``degrees`` at the
+    middle frame and retraces the same path, making the final camera exactly the
+    known input view as well.
     """
 
     if num_frames < 2:
@@ -118,6 +122,8 @@ def generate_orbit_trajectory(
     pivot = torch.as_tensor(pivot_world, dtype=torch.float32, device=start_c2w.device)
 
     progress = torch.linspace(0.0, 1.0, num_frames, device=start_c2w.device)
+    if return_to_start:
+        progress = 1.0 - torch.abs(2.0 * progress - 1.0)
     if ease:
         progress = 0.5 - 0.5 * torch.cos(progress * math.pi)
     sign = 1.0 if direction == "right" else -1.0
