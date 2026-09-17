@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reconstruct one image with DA3 and render an 81-frame 90-degree orbit."""
+"""Reconstruct remembered views with DA3 and render a configurable orbit segment."""
 
 from __future__ import annotations
 
@@ -27,6 +27,15 @@ def parse_args() -> argparse.Namespace:
         "--image",
         type=Path,
         default=Path("/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/image.jpg"),
+    )
+    parser.add_argument(
+        "--images",
+        type=Path,
+        nargs="+",
+        help=(
+            "Multiple remembered views for joint DA3 pose/GS reconstruction. "
+            "The last image is the trajectory start view. Overrides --image."
+        ),
     )
     parser.add_argument(
         "--prompt",
@@ -85,10 +94,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    for name in ("image", "prompt", "weights"):
+    for name in ("prompt", "weights"):
         path = getattr(args, name)
         if not path.is_file():
             raise FileNotFoundError(f"--{name} does not exist: {path}")
+    input_images = args.images if args.images else [args.image]
+    for path in input_images:
+        if not path.is_file():
+            raise FileNotFoundError(f"Input image does not exist: {path}")
     if (args.output_height is None) != (args.output_width is None):
         raise ValueError("--output-height and --output-width must be provided together")
     if args.chunk_size < 1:
@@ -143,6 +156,8 @@ def main() -> None:
     validate_args(args)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     prompt = args.prompt.read_text(encoding="utf-8").strip()
+    input_images = args.images if args.images else [args.image]
+    source_view_index = len(input_images) - 1
 
     print(f"Loading {args.model_name} from {args.weights}")
     model = DepthAnything3(model_name=args.model_name)
@@ -160,7 +175,7 @@ def main() -> None:
     device = torch.device(args.device)
     model = model.to(device).eval()
     prediction = model.inference(
-        [str(args.image)],
+        [str(path) for path in input_images],
         infer_gs=True,
         process_res=args.process_res,
         process_res_method="upper_bound_resize",
@@ -168,17 +183,22 @@ def main() -> None:
     if prediction.gaussians is None:
         raise RuntimeError("DA3 inference completed without Gaussian output")
 
-    pivot = estimate_orbit_pivot(
-        depth=prediction.depth[0],
-        intrinsics=prediction.intrinsics[0],
-        extrinsics=prediction.extrinsics[0],
-        confidence=None if prediction.conf is None else prediction.conf[0],
-        sky=None if prediction.sky is None else prediction.sky[0],
-        center_crop=args.center_crop,
-        depth_scale=args.pivot_depth_scale,
-    )
+    view_pivots = []
+    for view_index in range(len(input_images)):
+        view_pivots.append(
+            estimate_orbit_pivot(
+                depth=prediction.depth[view_index],
+                intrinsics=prediction.intrinsics[view_index],
+                extrinsics=prediction.extrinsics[view_index],
+                confidence=None if prediction.conf is None else prediction.conf[view_index],
+                sky=None if prediction.sky is None else prediction.sky[view_index],
+                center_crop=args.center_crop,
+                depth_scale=args.pivot_depth_scale,
+            )
+        )
+    pivot = torch.stack(view_pivots).median(dim=0).values
     trajectory = generate_orbit_trajectory(
-        prediction.extrinsics[0],
+        prediction.extrinsics[source_view_index],
         pivot,
         num_frames=args.frames,
         degrees=args.degrees,
@@ -194,6 +214,7 @@ def main() -> None:
         output_hw=output_hw,
         chunk_size=args.chunk_size,
         alpha_threshold=args.alpha_threshold,
+        source_view_index=source_view_index,
     )
 
     rgb_u8 = (
@@ -212,7 +233,7 @@ def main() -> None:
 
     render_height, render_width = int(rgb.shape[-2]), int(rgb.shape[-1])
     input_height, input_width = prediction.depth.shape[-2:]
-    render_intrinsics = prediction.intrinsics[0].copy()
+    render_intrinsics = prediction.intrinsics[source_view_index].copy()
     render_intrinsics[0] *= render_width / input_width
     render_intrinsics[1] *= render_height / input_height
     np.savez_compressed(
@@ -223,7 +244,9 @@ def main() -> None:
         rendered_depth=depth.float().cpu().numpy(),
     )
     metadata = {
-        "image": str(args.image),
+        "image": str(input_images[-1]),
+        "input_images": [str(path) for path in input_images],
+        "source_view_index": source_view_index,
         "prompt_file": str(args.prompt),
         "prompt": prompt,
         "weights": str(args.weights),

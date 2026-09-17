@@ -165,6 +165,7 @@ def render_orbit(
     output_hw: tuple[int, int] | None = None,
     chunk_size: int = 4,
     alpha_threshold: float = 0.01,
+    source_view_index: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Render RGB, depth and a binary valid-geometry mask for an orbit."""
 
@@ -172,6 +173,11 @@ def render_orbit(
         raise ValueError("Prediction has no Gaussians; call inference(..., infer_gs=True)")
     if not 0.0 <= alpha_threshold <= 1.0:
         raise ValueError("alpha_threshold must be in [0, 1]")
+    view_count = len(prediction.intrinsics)
+    if not 0 <= source_view_index < view_count:
+        raise IndexError(
+            f"source_view_index must be in [0, {view_count}), got {source_view_index}"
+        )
 
     gaussians = prediction.gaussians
     device = gaussians.means.device
@@ -185,7 +191,9 @@ def render_orbit(
     height, width = output_hw or tuple(prediction.depth.shape[-2:])
 
     intrinsic = torch.as_tensor(
-        prediction.intrinsics[0], dtype=gaussians.means.dtype, device=device
+        prediction.intrinsics[source_view_index],
+        dtype=gaussians.means.dtype,
+        device=device,
     )
     input_height, input_width = prediction.depth.shape[-2:]
     intrinsic = intrinsic.clone()
@@ -198,13 +206,13 @@ def render_orbit(
     colors, depths, alphas = [], [], []
     for start in range(0, frame_count, chunk_size):
         end = min(frame_count, start + chunk_size)
-        view_count = end - start
+        chunk_view_count = end - start
         color, depth, alpha = render_3dgs(
             extrinsics=target_extrinsics[start:end],
-            intrinsics=intrinsic_norm.unsqueeze(0).expand(view_count, -1, -1),
+            intrinsics=intrinsic_norm.unsqueeze(0).expand(chunk_view_count, -1, -1),
             image_shape=(height, width),
             gaussian=gaussians,
-            num_view=view_count,
+            num_view=chunk_view_count,
             color_mode="RGB+ED",
             use_sh=True,
             return_alpha=True,

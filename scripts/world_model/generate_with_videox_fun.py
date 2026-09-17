@@ -36,6 +36,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     geometry_dir = DEFAULT_WORLD_ROOT / "output/task1_orbit_roundtrip_10"
     parser.add_argument("--image", type=Path, default=DEFAULT_WORLD_ROOT / "image.jpg")
+    parser.add_argument(
+        "--end-image",
+        type=Path,
+        help="Optional known final frame. Defaults to --image for a round-trip segment.",
+    )
     parser.add_argument("--prompt", type=Path, default=DEFAULT_WORLD_ROOT / "prompt.txt")
     parser.add_argument("--control-video", type=Path, default=geometry_dir / "gs_render.mp4")
     parser.add_argument("--control-mask", type=Path, default=geometry_dir / "mask.mp4")
@@ -67,6 +72,8 @@ def validate_args(args: argparse.Namespace) -> None:
         path = getattr(args, name)
         if not path.is_file():
             raise FileNotFoundError(f"--{name.replace('_', '-')} does not exist: {path}")
+    if args.end_image is not None and not args.end_image.is_file():
+        raise FileNotFoundError(f"--end-image does not exist: {args.end_image}")
     if not args.model_path.is_dir():
         raise FileNotFoundError(f"--model-path does not exist: {args.model_path}")
     if (args.frames - 1) % 4:
@@ -88,14 +95,14 @@ def configure_videox_fun_import() -> None:
 
 
 def choose_output_size(image_path: Path) -> tuple[int, int]:
-    """Return (height, width) using the established 1088-short-side buckets."""
+    """Return (height, width) using 720p short-side aspect-ratio buckets."""
     with Image.open(image_path) as image:
         width, height = image.size
     ratio = min(width, height) / max(width, height)
-    long_side = 1440 if ratio > 0.70 else 1600 if ratio > 0.65 else 1920
+    long_side = 960 if ratio > 0.70 else 1056 if ratio > 0.65 else 1280
     if width <= height:
-        return long_side, 1088
-    return 1088, long_side
+        return long_side, 720
+    return 720, long_side
 
 
 def video_info(path: Path) -> tuple[int, int, int]:
@@ -276,10 +283,12 @@ def main() -> None:
     print("VideoX-Fun loaded in model_full_load mode")
 
     prompt = args.prompt.read_text(encoding="utf-8").strip()
-    start_end_image = Image.open(args.image).convert("RGB")
+    start_image = Image.open(args.image).convert("RGB")
+    end_image_path = args.end_image if args.end_image is not None else args.image
+    end_image = Image.open(end_image_path).convert("RGB")
     inpaint_video, inpaint_mask, _ = get_image_to_video_latent(
-        [start_end_image],
-        [start_end_image.copy()],
+        [start_image],
+        [end_image],
         video_length=args.frames,
         sample_size=[height, width],
     )
@@ -318,6 +327,7 @@ def main() -> None:
     save_videos_grid(sample.cpu(), str(args.output), fps=args.fps)
     metadata = {
         "image": str(args.image),
+        "end_image": str(end_image_path),
         "prompt_file": str(args.prompt),
         "control_video": str(args.control_video),
         "control_mask": str(args.control_mask),
@@ -332,7 +342,7 @@ def main() -> None:
         "guidance_scale": args.guidance_scale,
         "lora_weight": args.lora_weight,
         "seed": args.seed,
-        "endpoint_constraint": "same known input image at first and last frame",
+        "endpoint_constraint": "known start and end images",
         "control_mask_convention": "1 = missing DA3 geometry, 0 = valid geometry",
         "memory_mode": "model_full_load",
     }

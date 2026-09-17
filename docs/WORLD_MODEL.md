@@ -98,9 +98,9 @@ The model paths default to:
 ```
 
 Generation defaults are 81 frames, 8 inference steps, CFG 6.0, LoRA weight
-1.0, and full GPU loading. Output resolution is selected from the established
-1088-short-side aspect-ratio buckets. Override both dimensions together when
-needed, for example `--height 1088 --width 1440`.
+1.0, and full GPU loading. Output resolution uses 720p short-side buckets
+(`960x720`, `1056x720`, or `1280x720` for landscape inputs, transposed for
+portrait). Override both dimensions together when needed.
 
 Outputs under `output/world_model_step`:
 
@@ -116,3 +116,38 @@ selectively add the maximum-angle generated frame to a memory directory, add:
 ```bash
 --save-peak-frame-to-memory /path/to/memory
 ```
+
+## Task 3: iterative 360-degree orbit
+
+`run_iterative_orbit.py` expands the memory in 15-degree increments and is
+safe to resume. With the default configuration it performs 24 steps:
+
+- Steps 1-23 render `0° -> 15° -> 0°` relative to the latest remembered view.
+  VideoX-Fun receives that known view as both endpoint images, and generated
+  frame 40 is stored as the next 15-degree memory view.
+- Step 24 renders a one-way 345° -> 360° closure. Its start constraint is the
+  latest 345-degree memory view and its end constraint is the original input
+  image, so the loop is explicitly closed rather than extrapolated blindly.
+- DA3 jointly reconstructs from remembered images on every step. To bound Giant
+  model memory, at most eight views are sampled uniformly by default, always
+  including the original and latest views. Set `--max-da3-views` to change it.
+
+Start or resume the complete orbit from the repository root:
+
+```bash
+PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
+python scripts/world_model/run_iterative_orbit.py
+```
+
+For an initial one- or two-step test before committing to all 24 generations:
+
+```bash
+PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
+python scripts/world_model/run_iterative_orbit.py --max-steps-this-run 2
+```
+
+Run the same command again without changing `--output-dir`, direction, or step
+angle to resume from `orbit_state.json`. Each step has its own geometry and
+generated video directory. On completion, outbound halves are assembled into
+`orbit_360.mp4`; the individual round-trip videos remain available for quality
+inspection.
