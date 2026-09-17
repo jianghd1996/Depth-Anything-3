@@ -22,6 +22,18 @@ import torch
 from depth_anything_3.utils.logger import logger
 
 
+def _unwrap_state_dict(checkpoint) -> Dict[str, torch.Tensor]:
+    """Accept raw state dicts and common training-checkpoint containers."""
+    if not isinstance(checkpoint, dict):
+        raise TypeError(f"Expected a state-dict checkpoint, got {type(checkpoint).__name__}")
+    for key in ("state_dict", "model_state_dict", "model"):
+        candidate = checkpoint.get(key)
+        if isinstance(candidate, dict) and candidate:
+            if all(isinstance(name, str) for name in candidate):
+                return candidate
+    return checkpoint
+
+
 def convert_general_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """
     Convert general model state dict to match current model architecture.
@@ -99,7 +111,7 @@ def load_pretrained_weights(model, model_path: str, is_metric: bool = False) -> 
     Returns:
         Tuple of (missed_keys, unexpected_keys)
     """
-    state_dict = torch.load(model_path, map_location="cpu")
+    state_dict = _unwrap_state_dict(torch.load(model_path, map_location="cpu"))
 
     if is_metric:
         state_dict = convert_metric_state_dict(state_dict)
@@ -128,12 +140,12 @@ def load_pretrained_nested_weights(
         Tuple of (missed_keys, unexpected_keys)
     """
     # Load main model weights
-    state_dict0 = torch.load(main_model_path, map_location="cpu")
+    state_dict0 = _unwrap_state_dict(torch.load(main_model_path, map_location="cpu"))
     state_dict0 = convert_general_state_dict(state_dict0)
     state_dict0 = {k.replace("model.", "model.da3."): v for k, v in state_dict0.items()}
 
     # Load metric model weights
-    state_dict1 = torch.load(metric_model_path, map_location="cpu")
+    state_dict1 = _unwrap_state_dict(torch.load(metric_model_path, map_location="cpu"))
     state_dict1 = convert_metric_state_dict(state_dict1)
     state_dict1 = {k.replace("model.", "model.da3_metric."): v for k, v in state_dict1.items()}
 
