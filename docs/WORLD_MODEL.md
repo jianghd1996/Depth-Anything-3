@@ -98,9 +98,12 @@ The model paths default to:
 ```
 
 Generation defaults are 81 frames, 8 inference steps, CFG 6.0, LoRA weight
-1.0, and full GPU loading. Output resolution uses 720p short-side buckets
-(`960x720`, `1056x720`, or `1280x720` for landscape inputs, transposed for
-portrait). Override both dimensions together when needed.
+1.0, and full GPU loading. Output resolution uses approximately 720p,
+32-aligned short-side buckets (`960x736`, `1056x736`, or `1280x736` for
+landscape inputs, transposed for portrait). Exact 720 is not valid here because
+the 16x VAE compression produces 45 latent pixels, which cannot be preserved by
+the transformer's 2x2 spatial patches. Override both dimensions together when
+needed; each dimension must be divisible by 32.
 
 Outputs under `output/world_model_step`:
 

@@ -26,6 +26,7 @@ DEFAULT_MODEL_PATH = Path(
     "/home/z00566689/dev/mnt/SingleRecon/Cloud_Models/Wan2.2-Fun-5B-Control"
 )
 DEFAULT_LORA_PATH = DEFAULT_MODEL_PATH / "33000_lora.safetensors"
+REQUIRED_SPATIAL_MULTIPLE = 32
 DEFAULT_NEGATIVE_PROMPT = (
     "色调艳丽，过曝，静态，细节模糊不清，字幕，整体发灰，最差质量，低质量，"
     "JPEG压缩残留，丑陋，残缺，变形，扭曲，杂乱的背景，闪烁，颜色漂移"
@@ -80,8 +81,14 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--frames must satisfy (frames - 1) % 4 == 0; use 81 by default")
     if (args.height is None) != (args.width is None):
         raise ValueError("--height and --width must be provided together")
-    if args.height is not None and (args.height % 16 or args.width % 16):
-        raise ValueError("--height and --width must both be divisible by 16")
+    if args.height is not None and (
+        args.height % REQUIRED_SPATIAL_MULTIPLE
+        or args.width % REQUIRED_SPATIAL_MULTIPLE
+    ):
+        raise ValueError(
+            "--height and --width must both be divisible by 32. Wan2.2-Fun-5B "
+            "compresses space by 16 and then applies 2x2 transformer patches."
+        )
 
 
 def configure_videox_fun_import() -> None:
@@ -95,14 +102,17 @@ def configure_videox_fun_import() -> None:
 
 
 def choose_output_size(image_path: Path) -> tuple[int, int]:
-    """Return (height, width) using 720p short-side aspect-ratio buckets."""
+    """Return (height, width) using roughly-720p, model-aligned buckets."""
     with Image.open(image_path) as image:
         width, height = image.size
     ratio = min(width, height) / max(width, height)
     long_side = 960 if ratio > 0.70 else 1056 if ratio > 0.65 else 1280
+    # 720 / 16 = 45 produces an odd latent side. The transformer's 2x2
+    # patchification then truncates it to 44, so use the nearest 32-aligned side.
+    short_side = 736
     if width <= height:
-        return long_side, 720
-    return 720, long_side
+        return long_side, short_side
+    return short_side, long_side
 
 
 def video_info(path: Path) -> tuple[int, int, int]:
