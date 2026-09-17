@@ -27,22 +27,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--image",
         type=Path,
-        default=Path("/mnt/DataPart/jianghongda/WorldModel-dev/image.jpg"),
+        default=Path("/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/image.jpg"),
     )
     parser.add_argument(
         "--prompt",
         type=Path,
-        default=Path("/mnt/DataPart/jianghongda/WorldModel-dev/prompt.txt"),
+        default=Path("/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/prompt.txt"),
     )
     parser.add_argument(
         "--weights",
         type=Path,
-        default=Path("/mnt/DataPart/jianghongda/WorldModel-dev/DA3.pt"),
+        default=Path("/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/DA3.pt"),
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("/mnt/DataPart/jianghongda/WorldModel-dev/output/task1_orbit_90"),
+        default=Path(
+            "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/output/task1_orbit_90"
+        ),
     )
     parser.add_argument(
         "--model-name",

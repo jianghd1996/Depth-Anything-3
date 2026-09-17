@@ -7,10 +7,11 @@ orbit pivot from the center of the predicted geometry, and renders 81 views over
 a 90-degree horizontal orbit. The text prompt is preserved in `metadata.json`
 for the later VideoX-Fun stage; it does not affect DA3 geometry prediction.
 
-Install the repository and Gaussian rasterizer first:
+Install the Gaussian rasterizer in the active DA3 environment first. The
+commands below use `PYTHONPATH` to expose this checkout's `src` directory, so
+the repository itself does not need to be installed into the environment:
 
 ```bash
-pip install -e .
 pip install --no-build-isolation \
   git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
 ```
@@ -18,17 +19,19 @@ pip install --no-build-isolation \
 The script defaults to the requested paths, so the basic run is:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python scripts/world_model/render_single_image_orbit.py
+PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
+python scripts/world_model/render_single_image_orbit.py
 ```
 
 Equivalent explicit invocation:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python scripts/world_model/render_single_image_orbit.py \
-  --image /mnt/DataPart/jianghongda/WorldModel-dev/image.jpg \
-  --prompt /mnt/DataPart/jianghongda/WorldModel-dev/prompt.txt \
-  --weights /mnt/DataPart/jianghongda/WorldModel-dev/DA3.pt \
-  --output-dir /mnt/DataPart/jianghongda/WorldModel-dev/output/task1_orbit_90 \
+PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
+python scripts/world_model/render_single_image_orbit.py \
+  --image /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/image.jpg \
+  --prompt /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/prompt.txt \
+  --weights /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/DA3.pt \
+  --output-dir /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/output/task1_orbit_90 \
   --model-name da3-giant \
   --device cuda:0 \
   --frames 81 \
