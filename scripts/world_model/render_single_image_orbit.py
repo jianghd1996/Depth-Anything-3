@@ -14,7 +14,6 @@ from PIL import Image
 
 from depth_anything_3.api import DepthAnything3
 from depth_anything_3.utils.export.gs import export_to_gs_ply
-from depth_anything_3.utils.model_loading import load_pretrained_weights
 from depth_anything_3.world_model import (
     estimate_orbit_pivot,
     generate_orbit_trajectory,
@@ -48,9 +47,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model-name",
-        default="da3-giant",
+        default="da3nested-giant-large",
         choices=("da3-giant", "da3nested-giant-large"),
-        help="DA3 architecture matching the local checkpoint. Both choices contain the GS head.",
+        help=(
+            "DA3 architecture matching the local checkpoint. The default matches DA3.pt, "
+            "which was saved from da3nested-giant-large."
+        ),
     )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--process-res", type=int, default=504)
@@ -99,6 +101,34 @@ def write_mp4(frames: np.ndarray, path: Path, fps: int, crf: int = 18) -> None:
         clip.close()
 
 
+def load_checkpoint_weights(
+    model: DepthAnything3, checkpoint_path: Path
+) -> tuple[list[str], list[str]]:
+    """Load DA3 training checkpoints without rewriting model parameter names.
+
+    The project checkpoint is saved as ``{"model": model.state_dict(), ...}``.
+    Loading that nested state dict directly mirrors the training/inference code
+    that produced DA3.pt and, importantly, preserves the nested model's
+    ``model.da3.*`` and ``model.da3_metric.*`` parameter names.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        raise TypeError(
+            f"Expected a state-dict checkpoint, got {type(checkpoint).__name__}"
+        )
+
+    state_dict = checkpoint
+    for container_key in ("model", "state_dict", "model_state_dict"):
+        candidate = checkpoint.get(container_key)
+        if isinstance(candidate, dict) and candidate:
+            state_dict = candidate
+            print(f"Loading weights from checkpoint[{container_key!r}]")
+            break
+
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    return list(missing), list(unexpected)
+
+
 def main() -> None:
     args = parse_args()
     validate_args(args)
@@ -107,7 +137,7 @@ def main() -> None:
 
     print(f"Loading {args.model_name} from {args.weights}")
     model = DepthAnything3(model_name=args.model_name)
-    missing, unexpected = load_pretrained_weights(model, str(args.weights))
+    missing, unexpected = load_checkpoint_weights(model, args.weights)
     missing_gs = [key for key in missing if ".gs_head." in key]
     if missing_gs:
         sample = "\n  ".join(missing_gs[:8])

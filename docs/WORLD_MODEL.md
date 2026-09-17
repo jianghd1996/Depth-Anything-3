@@ -32,7 +32,7 @@ python scripts/world_model/render_single_image_orbit.py \
   --prompt /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/prompt.txt \
   --weights /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/DA3.pt \
   --output-dir /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/output/task1_orbit_90 \
-  --model-name da3-giant \
+  --model-name da3nested-giant-large \
   --device cuda:0 \
   --frames 81 \
   --degrees 90 \
@@ -55,5 +55,6 @@ Useful controls:
   surface lies noticeably in front of the desired object center.
 - Set `--output-height` and `--output-width` together to render a chosen size.
 - Reduce `--chunk-size` if Gaussian rendering runs out of GPU memory.
-- Use `--model-name da3nested-giant-large` only when `DA3.pt` is a nested-model
-  checkpoint; the default matches the standard Gaussian-capable DA3 checkpoint.
+- The default `--model-name da3nested-giant-large` matches the provided
+  `DA3.pt` training checkpoint. Use `--model-name da3-giant` only with a
+  checkpoint saved from that single-branch architecture.
