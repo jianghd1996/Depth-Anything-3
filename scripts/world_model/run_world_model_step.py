@@ -33,7 +33,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_VIDEO_MODEL / "33000_lora.safetensors",
     )
-    parser.add_argument("--videox-fun-root", type=Path)
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -156,8 +155,6 @@ def main() -> None:
         "--device",
         args.device,
     ]
-    if args.videox_fun_root is not None:
-        generation_command.extend(["--videox-fun-root", str(args.videox_fun_root)])
     if args.height is not None:
         generation_command.extend(["--height", str(args.height), "--width", str(args.width)])
     run(generation_command, env)

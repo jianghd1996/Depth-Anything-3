@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -22,6 +20,7 @@ from transformers import AutoTokenizer
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
+VENDORED_VIDEOX_FUN_ROOT = REPO_ROOT / "third_party/VideoX-Fun"
 DEFAULT_WORLD_ROOT = Path("/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev")
 DEFAULT_MODEL_PATH = Path(
     "/home/z00566689/dev/mnt/SingleRecon/Cloud_Models/Wan2.2-Fun-5B-Control"
@@ -46,14 +45,6 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=Path,
         default=SCRIPT_DIR / "configs/wan_civitai_5b.yaml",
-    )
-    parser.add_argument(
-        "--videox-fun-root",
-        type=Path,
-        help=(
-            "VideoX-Fun source checkout. Optional when videox_fun is already importable; "
-            "VIDEOX_FUN_ROOT and a sibling ../VideoX-Fun checkout are also detected."
-        ),
     )
     parser.add_argument("--output", type=Path, default=geometry_dir / "generated.mp4")
     parser.add_argument("--frames", type=int, default=81)
@@ -86,26 +77,14 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--height and --width must both be divisible by 16")
 
 
-def configure_videox_fun_import(explicit_root: Path | None) -> Path | None:
-    candidates = []
-    if explicit_root is not None:
-        candidates.append(explicit_root)
-    env_root = os.environ.get("VIDEOX_FUN_ROOT")
-    if env_root:
-        candidates.append(Path(env_root))
-    if not candidates and importlib.util.find_spec("videox_fun") is not None:
-        return None
-    candidates.append(REPO_ROOT.parent / "VideoX-Fun")
-
-    for candidate in candidates:
-        candidate = candidate.expanduser().resolve()
-        if (candidate / "videox_fun").is_dir():
-            sys.path.insert(0, str(candidate))
-            return candidate
-    raise ModuleNotFoundError(
-        "Could not import videox_fun. Pass --videox-fun-root /path/to/VideoX-Fun "
-        "or set VIDEOX_FUN_ROOT. Use VideoX-Fun main at commit 18b9b78 or newer."
-    )
+def configure_videox_fun_import() -> None:
+    package_dir = VENDORED_VIDEOX_FUN_ROOT / "videox_fun"
+    if not package_dir.is_dir():
+        raise ModuleNotFoundError(
+            f"Vendored VideoX-Fun package is missing: {package_dir}. "
+            "Pull the complete world-model-dev branch."
+        )
+    sys.path.insert(0, str(VENDORED_VIDEOX_FUN_ROOT))
 
 
 def choose_output_size(image_path: Path) -> tuple[int, int]:
@@ -196,7 +175,7 @@ def expand_and_load_patch_embedding(transformer, state_dict: dict[str, torch.Ten
 def main() -> None:
     args = parse_args()
     validate_args(args)
-    detected_root = configure_videox_fun_import(args.videox_fun_root)
+    configure_videox_fun_import()
 
     from videox_fun.models import (
         AutoencoderKLWan,
@@ -344,7 +323,8 @@ def main() -> None:
         "control_mask": str(args.control_mask),
         "model_path": str(args.model_path),
         "lora_path": str(args.lora_path),
-        "videox_fun_root": None if detected_root is None else str(detected_root),
+        "videox_fun_root": str(VENDORED_VIDEOX_FUN_ROOT),
+        "videox_fun_upstream_commit": "18b9b78d85b69edf483e9eeebaa057b39716aba1",
         "output": str(args.output),
         "frames": args.frames,
         "resolution": [height, width],

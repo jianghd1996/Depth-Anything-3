@@ -78,17 +78,16 @@ The integrated runner performs one complete geometry-and-generation step:
    after expanding the transformer Conv3d by four channels. The remaining LoRA
    weights are merged at weight 1.0.
 
-The wrapper imports the `videox_fun` package from an existing checkout. Use the
-VideoX-Fun `main` branch at commit `18b9b78` or newer because it contains the
-control-mask device fix. Pass that checkout with `--videox-fun-root`, set
-`VIDEOX_FUN_ROOT`, or place it next to this repository as `../VideoX-Fun`.
+The required VideoX-Fun inference subset is vendored under
+`third_party/VideoX-Fun` at upstream commit `18b9b78`. It includes the
+control-mask device fix and is imported directly by the runner; no separate
+VideoX-Fun checkout, installation, or source-path argument is required.
 
 Run the full step with one GPU:
 
 ```bash
 PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
-python scripts/world_model/run_world_model_step.py \
-  --videox-fun-root /path/to/VideoX-Fun
+python scripts/world_model/run_world_model_step.py
 ```
 
 The model paths default to:
