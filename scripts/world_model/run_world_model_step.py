@@ -150,6 +150,8 @@ def main() -> None:
         str(SCRIPT_DIR / "generate_with_videox_fun.py"),
         "--image",
         str(args.image),
+        "--reference-image",
+        str(args.image),
         "--prompt",
         str(args.prompt),
         "--control-video",
@@ -193,6 +195,7 @@ def main() -> None:
 
     manifest = {
         "image": str(args.image),
+        "reference_image": str(args.image),
         "prompt": str(args.prompt),
         "geometry_dir": str(geometry_dir),
         "generated_video": str(generated_video),

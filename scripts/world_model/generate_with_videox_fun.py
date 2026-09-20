@@ -42,6 +42,19 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional known final frame. Defaults to --image for a round-trip segment.",
     )
+    parser.add_argument(
+        "--reference-image",
+        type=Path,
+        help=(
+            "Persistent appearance/identity reference passed through the transformer's "
+            "ref_conv branch. Defaults to --image."
+        ),
+    )
+    parser.add_argument(
+        "--disable-reference-image",
+        action="store_true",
+        help="Disable ref_conv conditioning for an ablation run.",
+    )
     parser.add_argument("--prompt", type=Path, default=DEFAULT_WORLD_ROOT / "prompt.txt")
     parser.add_argument("--control-video", type=Path, default=geometry_dir / "gs_render.mp4")
     parser.add_argument("--control-mask", type=Path, default=geometry_dir / "mask.mp4")
@@ -75,6 +88,10 @@ def validate_args(args: argparse.Namespace) -> None:
             raise FileNotFoundError(f"--{name.replace('_', '-')} does not exist: {path}")
     if args.end_image is not None and not args.end_image.is_file():
         raise FileNotFoundError(f"--end-image does not exist: {args.end_image}")
+    if args.reference_image is not None and not args.reference_image.is_file():
+        raise FileNotFoundError(
+            f"--reference-image does not exist: {args.reference_image}"
+        )
     if not args.model_path.is_dir():
         raise FileNotFoundError(f"--model-path does not exist: {args.model_path}")
     if (args.frames - 1) % 4:
@@ -204,6 +221,7 @@ def main() -> None:
     from videox_fun.utils.lora_utils import merge_lora
     from videox_fun.utils.utils import (
         filter_kwargs,
+        get_image_latent,
         get_image_to_video_latent,
         get_video_to_video_latent,
         save_videos_grid,
@@ -312,6 +330,24 @@ def main() -> None:
     control_mask = load_missing_region_mask(
         args.control_mask, args.frames, height, width
     )
+    reference_image_path = (
+        args.reference_image if args.reference_image is not None else args.image
+    )
+    reference_image = None
+    if not args.disable_reference_image:
+        if not transformer.config.get("add_ref_conv", False) or transformer.ref_conv is None:
+            raise RuntimeError(
+                "Reference conditioning was requested, but this transformer does not "
+                "enable add_ref_conv. Check the model config and use the "
+                "Wan2.2-Fun-5B-Control checkpoint, or pass --disable-reference-image "
+                "for an explicit ablation."
+            )
+        reference_image = get_image_latent(
+            str(reference_image_path), sample_size=[height, width]
+        )
+        print(f"Reference conditioning: {reference_image_path}")
+    else:
+        print("Reference conditioning disabled")
     generator = torch.Generator(device=args.device).manual_seed(args.seed)
     boundary = config.transformer_additional_kwargs.get("boundary", 0.875)
 
@@ -329,6 +365,7 @@ def main() -> None:
             mask_video=inpaint_mask,
             control_video=control_video,
             control_mask=control_mask,
+            ref_image=reference_image,
             boundary=boundary,
             shift=args.shift,
         ).videos
@@ -338,6 +375,12 @@ def main() -> None:
     metadata = {
         "image": str(args.image),
         "end_image": str(end_image_path),
+        "reference_image": (
+            None if args.disable_reference_image else str(reference_image_path)
+        ),
+        "reference_branch": (
+            "disabled" if args.disable_reference_image else "vae_latent_ref_conv"
+        ),
         "prompt_file": str(args.prompt),
         "control_video": str(args.control_video),
         "control_mask": str(args.control_mask),

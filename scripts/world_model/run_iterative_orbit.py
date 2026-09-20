@@ -292,6 +292,8 @@ def main() -> None:
             str(latest_image),
             "--end-image",
             str(original_constraint if is_closure else latest_image),
+            "--reference-image",
+            str(original_constraint),
             "--prompt",
             str(args.prompt),
             "--control-video",
@@ -340,6 +342,7 @@ def main() -> None:
             "pivot_depth_scale": args.pivot_depth_scale,
             "start_image": str(latest_image),
             "end_image": str(original_constraint if is_closure else latest_image),
+            "reference_image": str(original_constraint),
             "da3_images": [str(path) for path in selected_images],
             "generated_video": str(generated_video.resolve()),
             "new_memory_image": (

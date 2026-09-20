@@ -78,7 +78,9 @@ The integrated runner performs one complete geometry-and-generation step:
 1. DA3 reconstructs Gaussians and renders `geometry/gs_render.mp4` plus
    `geometry/mask.mp4` on the configurable small-angle round trip.
 2. VideoX-Fun uses the same input image as both endpoint constraints, the GS
-   video as control, and the mask's black pixels as missing geometry.
+   video as control, and the mask's black pixels as missing geometry. The same
+   real input image is also VAE-encoded and injected through the transformer's
+   `ref_conv` branch as a persistent appearance and identity reference.
 3. The mask-aware LoRA's `patch_embedding.*` weights are loaded separately
    after expanding the transformer Conv3d by four channels. The remaining LoRA
    weights are merged at weight 1.0.
@@ -139,6 +141,9 @@ safe to resume. With the default configuration it performs 36 steps:
 - DA3 jointly reconstructs from remembered images on every step. To bound Giant
   model memory, at most eight views are sampled uniformly by default, always
   including the original and latest views. Set `--max-da3-views` to change it.
+- VideoX-Fun always receives the original real input through `ref_image`, even
+  when a generated view is used as the current segment's endpoint image. This
+  prevents the reference identity and color from becoming fully autoregressive.
 
 Start or resume the complete orbit from the repository root:
 
