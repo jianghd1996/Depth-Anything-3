@@ -127,14 +127,14 @@ selectively add the maximum-angle generated frame to a memory directory, add:
 
 ## Task 3: iterative 360-degree orbit
 
-`run_iterative_orbit.py` expands the memory in 15-degree increments and is
-safe to resume. With the default configuration it performs 24 steps:
+`run_iterative_orbit.py` expands the memory in 10-degree increments and is
+safe to resume. With the default configuration it performs 36 steps:
 
-- Steps 1-23 render `0° -> 15° -> 0°` relative to the latest remembered view.
+- Steps 1-35 render `0° -> 10° -> 0°` relative to the latest remembered view.
   VideoX-Fun receives that known view as both endpoint images, and generated
-  frame 40 is stored as the next 15-degree memory view.
-- Step 24 renders a one-way 345° -> 360° closure. Its start constraint is the
-  latest 345-degree memory view and its end constraint is the original input
+  frame 40 is stored as the next 10-degree memory view.
+- Step 36 renders a one-way 350° -> 360° closure. Its start constraint is the
+  latest 350-degree memory view and its end constraint is the original input
   image, so the loop is explicitly closed rather than extrapolated blindly.
 - DA3 jointly reconstructs from remembered images on every step. To bound Giant
   model memory, at most eight views are sampled uniformly by default, always
@@ -147,11 +147,11 @@ PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
 python scripts/world_model/run_iterative_orbit.py
 ```
 
-For an initial one- or two-step test before committing to all 24 generations:
+For an initial three-step test before committing to all 36 generations:
 
 ```bash
 PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
-python scripts/world_model/run_iterative_orbit.py --max-steps-this-run 2
+python scripts/world_model/run_iterative_orbit.py --max-steps-this-run 3
 ```
 
 Run the same command again without changing `--output-dir`, direction, or step

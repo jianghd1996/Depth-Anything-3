@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Iteratively expand remembered views in 15-degree steps around a full orbit."""
+"""Iteratively expand remembered views in configurable steps around a full orbit."""
 
 from __future__ import annotations
 
@@ -35,10 +35,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_WORLD_ROOT / "output/orbit_360_step15",
+        default=DEFAULT_WORLD_ROOT / "output/orbit_360_step10",
     )
-    parser.add_argument("--degrees-per-step", type=int, default=15)
+    parser.add_argument("--degrees-per-step", type=int, default=10)
     parser.add_argument("--direction", choices=("left", "right"), default="right")
+    parser.add_argument(
+        "--center-crop",
+        type=float,
+        default=0.4,
+        help="Centered image fraction used to estimate the orbit target in each DA3 view.",
+    )
+    parser.add_argument(
+        "--pivot-depth-scale",
+        type=float,
+        default=0.9,
+        help="Scale estimated orbit-target depth; values below 1 move it toward the camera.",
+    )
     parser.add_argument("--max-da3-views", type=int, default=8)
     parser.add_argument("--frames", type=int, default=81)
     parser.add_argument("--fps", type=int, default=24)
@@ -68,6 +80,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--degrees-per-step must be a positive integer divisor of 360")
     if args.max_da3_views < 2:
         raise ValueError("--max-da3-views must be at least 2")
+    if not 0 < args.center_crop <= 1:
+        raise ValueError("--center-crop must be in (0, 1]")
+    if args.pivot_depth_scale <= 0:
+        raise ValueError("--pivot-depth-scale must be positive")
     if args.max_steps_this_run is not None and args.max_steps_this_run < 1:
         raise ValueError("--max-steps-this-run must be positive")
     if (args.frames - 1) % 4:
@@ -175,6 +191,8 @@ def main() -> None:
         expected = {
             "degrees_per_step": args.degrees_per_step,
             "direction": args.direction,
+            "center_crop": args.center_crop,
+            "pivot_depth_scale": args.pivot_depth_scale,
             "total_steps": total_steps,
         }
         for key, value in expected.items():
@@ -189,6 +207,8 @@ def main() -> None:
             "original_image": str(args.image.resolve()),
             "degrees_per_step": args.degrees_per_step,
             "direction": args.direction,
+            "center_crop": args.center_crop,
+            "pivot_depth_scale": args.pivot_depth_scale,
             "total_steps": total_steps,
             "completed_steps": 0,
             "memory_images": [str(original_memory_image.resolve())],
@@ -250,6 +270,10 @@ def main() -> None:
             str(args.frames),
             "--degrees",
             str(args.degrees_per_step),
+            "--center-crop",
+            str(args.center_crop),
+            "--pivot-depth-scale",
+            str(args.pivot_depth_scale),
             "--direction",
             args.direction,
             "--trajectory-mode",
@@ -312,6 +336,8 @@ def main() -> None:
             "cumulative_degrees": cumulative_degrees,
             "is_closure": is_closure,
             "trajectory_mode": "one-way" if is_closure else "round-trip",
+            "center_crop": args.center_crop,
+            "pivot_depth_scale": args.pivot_depth_scale,
             "start_image": str(latest_image),
             "end_image": str(original_constraint if is_closure else latest_image),
             "da3_images": [str(path) for path in selected_images],
