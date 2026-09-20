@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=Path(
-            "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/output/task1_orbit_roundtrip_10"
+            "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/output/task1_orbit_roundtrip_5"
         ),
     )
     parser.add_argument(
@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--process-res", type=int, default=504)
     parser.add_argument("--frames", type=int, default=81)
-    parser.add_argument("--degrees", type=float, default=10.0)
+    parser.add_argument("--degrees", type=float, default=5.0)
     parser.add_argument(
         "--trajectory-mode",
         choices=("round-trip", "one-way"),

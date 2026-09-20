@@ -35,7 +35,7 @@ DEFAULT_NEGATIVE_PROMPT = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    geometry_dir = DEFAULT_WORLD_ROOT / "output/task1_orbit_roundtrip_10"
+    geometry_dir = DEFAULT_WORLD_ROOT / "output/task1_orbit_roundtrip_5"
     parser.add_argument("--image", type=Path, default=DEFAULT_WORLD_ROOT / "image.jpg")
     parser.add_argument(
         "--end-image",

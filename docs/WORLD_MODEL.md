@@ -4,7 +4,7 @@
 
 The first stage reconstructs DA3 Gaussians from one image, estimates a robust
 orbit pivot from the center of the predicted geometry, and renders an 81-frame
-round trip. The default trajectory is `0° -> 10° -> 0°`: frame 40 is the peak
+round trip. The default trajectory is `0° -> 5° -> 0°`: frame 40 is the peak
 novel view, while frames 0 and 80 use the same known input camera. This limits
 the effect of an inaccurate single-view pivot and gives VideoX-Fun known first
 and last frames. The prompt does not affect DA3 geometry prediction.
@@ -16,6 +16,9 @@ the repository itself does not need to be installed into the environment:
 ```bash
 pip install --no-build-isolation \
   git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
+
+# Required by DA3 to rotate Gaussian spherical-harmonic coefficients.
+python -m pip install e3nn
 ```
 
 The script defaults to the requested paths, so the basic run is:
@@ -33,11 +36,11 @@ python scripts/world_model/render_single_image_orbit.py \
   --image /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/image.jpg \
   --prompt /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/prompt.txt \
   --weights /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/DA3.pt \
-  --output-dir /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/output/task1_orbit_roundtrip_10 \
+  --output-dir /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/output/task1_orbit_roundtrip_5 \
   --model-name da3nested-giant-large \
   --device cuda:0 \
   --frames 81 \
-  --degrees 10 \
+  --degrees 5 \
   --direction right \
   --trajectory-mode round-trip
 ```
@@ -54,8 +57,10 @@ Outputs:
 Useful controls:
 
 - Use `--direction left` for the opposite side of the object.
-- Use `--degrees 5` for a more conservative first expansion. Increase it only
-  after additional remembered views make geometry and pose more stable.
+- Start with `--degrees 5` and increase it gradually only after the geometry is
+  stable.
+- If the estimated target lies too deep, try `--pivot-depth-scale 0.9`, then
+  `0.8`. Keep each test in a separate `--output-dir` for direct comparison.
 - Use `--trajectory-mode one-way` only when a known final view is available or
   endpoint image conditioning is not required.
 - Decrease `--pivot-depth-scale` slightly (for example `0.9`) if the estimated
@@ -71,7 +76,7 @@ Useful controls:
 The integrated runner performs one complete geometry-and-generation step:
 
 1. DA3 reconstructs Gaussians and renders `geometry/gs_render.mp4` plus
-   `geometry/mask.mp4` on the 10-degree round trip.
+   `geometry/mask.mp4` on the configurable small-angle round trip.
 2. VideoX-Fun uses the same input image as both endpoint constraints, the GS
    video as control, and the mask's black pixels as missing geometry.
 3. The mask-aware LoRA's `patch_embedding.*` weights are loaded separately
@@ -154,41 +159,3 @@ angle to resume from `orbit_state.json`. Each step has its own geometry and
 generated video directory. On completion, outbound halves are assembled into
 `orbit_360.mp4`; the individual round-trip videos remain available for quality
 inspection.
-
-## Task 4: fixed-geometry horizontal translation diagnostic
-
-`run_iterative_translation.py` removes both orbit-center estimation and
-multi-view DA3 feedback from the experiment. DA3 runs once on the original
-image, then the same Gaussian scene and original camera coordinate system are
-used for every segment. The camera orientation stays fixed throughout.
-
-The default test has three steps to camera-right followed by three steps back:
-
-- Each outbound segment uses a round trip from the current offset to the next
-  offset and back. Its middle generated frame becomes the next known view.
-- Each return segment is one-way and uses the previously saved adjacent view as
-  its tail-frame constraint. The final return segment therefore uses the
-  original input as its tail frame.
-- One step is `0.08 * robust center depth` by default. This is independent of
-  DA3's absolute scene scale and can be changed with `--shift-ratio`.
-- DA3-generated geometry is stored once under `geometry/`; resume runs do not
-  estimate depth or pose again.
-
-Run the full right-and-back diagnostic:
-
-```bash
-PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
-python scripts/world_model/run_iterative_translation.py
-```
-
-It is safer to inspect the first two outbound segments before running all six
-VideoX-Fun calls:
-
-```bash
-PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 \
-python scripts/world_model/run_iterative_translation.py --max-steps-this-run 2
-```
-
-Repeat the full command to resume. The final continuous preview is written to
-`output/translation_right_roundtrip/translation_roundtrip.mp4`. Use a new
-`--output-dir` when changing the number of segments or shift ratio.

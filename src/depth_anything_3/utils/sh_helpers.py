@@ -18,9 +18,13 @@ from einops import einsum
 
 try:
     from e3nn.o3 import matrix_to_angles, wigner_D
-except ImportError:
+    _E3NN_IMPORT_ERROR = None
+except ImportError as exc:
     from depth_anything_3.utils.logger import logger
 
+    matrix_to_angles = None
+    wigner_D = None
+    _E3NN_IMPORT_ERROR = exc
     logger.warn("Dependency 'e3nn' not found. Required for rotating the camera space SH coeff")
 
 
@@ -58,6 +62,13 @@ def rotate_sh(
     rotations: torch.Tensor,  # "*#batch 3 3"
 ) -> torch.Tensor:  # "*batch n"
     # https://github.com/graphdeco-inria/gaussian-splatting/issues/176#issuecomment-2452412653
+    if matrix_to_angles is None or wigner_D is None:
+        raise ImportError(
+            "DA3 Gaussian rendering requires 'e3nn' to rotate spherical-harmonic "
+            "coefficients. Install it in the active Python environment with: "
+            "python -m pip install e3nn"
+        ) from _E3NN_IMPORT_ERROR
+
     device = sh_coefficients.device
     dtype = sh_coefficients.dtype
 

@@ -38,8 +38,20 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_WORLD_ROOT / "output/world_model_step",
     )
-    parser.add_argument("--degrees", type=float, default=10.0)
+    parser.add_argument("--degrees", type=float, default=5.0)
     parser.add_argument("--direction", choices=("left", "right"), default="right")
+    parser.add_argument(
+        "--center-crop",
+        type=float,
+        default=0.4,
+        help="Centered image fraction used to estimate the orbit target depth.",
+    )
+    parser.add_argument(
+        "--pivot-depth-scale",
+        type=float,
+        default=1.0,
+        help="Scale orbit-target depth; use a value below 1 when the target is too deep.",
+    )
     parser.add_argument("--frames", type=int, default=81)
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--steps", type=int, default=8)
@@ -84,6 +96,12 @@ def main() -> None:
     args = parse_args()
     if (args.height is None) != (args.width is None):
         raise ValueError("--height and --width must be provided together")
+    if args.degrees <= 0:
+        raise ValueError("--degrees must be positive")
+    if not 0 < args.center_crop <= 1:
+        raise ValueError("--center-crop must be in (0, 1]")
+    if args.pivot_depth_scale <= 0:
+        raise ValueError("--pivot-depth-scale must be positive")
 
     geometry_dir = args.output_dir / "geometry"
     generated_video = args.output_dir / "generated.mp4"
@@ -112,6 +130,10 @@ def main() -> None:
             str(args.frames),
             "--degrees",
             str(args.degrees),
+            "--center-crop",
+            str(args.center_crop),
+            "--pivot-depth-scale",
+            str(args.pivot_depth_scale),
             "--direction",
             args.direction,
             "--trajectory-mode",
@@ -175,6 +197,8 @@ def main() -> None:
         "geometry_dir": str(geometry_dir),
         "generated_video": str(generated_video),
         "degrees": args.degrees,
+        "center_crop": args.center_crop,
+        "pivot_depth_scale": args.pivot_depth_scale,
         "direction": args.direction,
         "trajectory_mode": "round-trip",
         "known_endpoint_frames": [0, args.frames - 1],
