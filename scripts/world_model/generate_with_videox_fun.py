@@ -40,7 +40,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--end-image",
         type=Path,
-        help="Optional known final frame. Defaults to --image for a round-trip segment.",
+        help="Optional known final frame. Defaults to --image unless --no-end-image is set.",
+    )
+    parser.add_argument(
+        "--no-end-image",
+        action="store_true",
+        help="Condition only the first frame; do not constrain the generated final frame.",
     )
     parser.add_argument(
         "--reference-image",
@@ -88,6 +93,8 @@ def validate_args(args: argparse.Namespace) -> None:
             raise FileNotFoundError(f"--{name.replace('_', '-')} does not exist: {path}")
     if args.end_image is not None and not args.end_image.is_file():
         raise FileNotFoundError(f"--end-image does not exist: {args.end_image}")
+    if args.no_end_image and args.end_image is not None:
+        raise ValueError("--no-end-image and --end-image cannot be used together")
     if args.reference_image is not None and not args.reference_image.is_file():
         raise FileNotFoundError(
             f"--reference-image does not exist: {args.reference_image}"
@@ -312,11 +319,17 @@ def main() -> None:
 
     prompt = args.prompt.read_text(encoding="utf-8").strip()
     start_image = Image.open(args.image).convert("RGB")
-    end_image_path = args.end_image if args.end_image is not None else args.image
-    end_image = Image.open(end_image_path).convert("RGB")
+    end_image_path = (
+        None
+        if args.no_end_image
+        else (args.end_image if args.end_image is not None else args.image)
+    )
+    end_image = (
+        None if end_image_path is None else Image.open(end_image_path).convert("RGB")
+    )
     inpaint_video, inpaint_mask, _ = get_image_to_video_latent(
         [start_image],
-        [end_image],
+        None if end_image is None else [end_image],
         video_length=args.frames,
         sample_size=[height, width],
     )
@@ -374,7 +387,7 @@ def main() -> None:
     save_videos_grid(sample.cpu(), str(args.output), fps=args.fps)
     metadata = {
         "image": str(args.image),
-        "end_image": str(end_image_path),
+        "end_image": None if end_image_path is None else str(end_image_path),
         "reference_image": (
             None if args.disable_reference_image else str(reference_image_path)
         ),
@@ -395,7 +408,11 @@ def main() -> None:
         "guidance_scale": args.guidance_scale,
         "lora_weight": args.lora_weight,
         "seed": args.seed,
-        "endpoint_constraint": "known start and end images",
+        "endpoint_constraint": (
+            "known start image only"
+            if end_image_path is None
+            else "known start and end images"
+        ),
         "control_mask_convention": "1 = missing DA3 geometry, 0 = valid geometry",
         "memory_mode": "model_full_load",
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Iteratively expand remembered views in configurable steps around a full orbit."""
+"""Generate absolute one-way orbit views, always starting from the real input."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_WORLD_ROOT / "output/orbit_360_step10",
+        default=DEFAULT_WORLD_ROOT / "output/orbit_absolute_step10",
     )
     parser.add_argument("--degrees-per-step", type=int, default=10)
     parser.add_argument("--direction", choices=("left", "right"), default="right")
@@ -145,21 +145,12 @@ def read_video_frames(path: Path) -> list:
 
 
 def build_orbit_preview(step_dirs: list[Path], output: Path, fps: int) -> None:
-    """Concatenate only the outbound half of each regular round-trip segment."""
+    """Build a contact-sheet video from the final absolute view of each segment."""
     assembled = []
-    for index, step_dir in enumerate(step_dirs):
+    hold_frames = max(1, fps // 2)
+    for step_dir in step_dirs:
         frames = read_video_frames(step_dir / "generated.mp4")
-        is_closure = index == len(step_dirs) - 1
-        if is_closure:
-            # Sample the one-way closure to the outbound-half pace of regular steps.
-            desired = len(frames) // 2 + 1
-            indices = [round(i * (len(frames) - 1) / (desired - 1)) for i in range(desired)]
-            selected = [frames[frame_index] for frame_index in indices]
-        else:
-            selected = frames[: len(frames) // 2 + 1]
-        if assembled:
-            selected = selected[1:]
-        assembled.extend(selected)
+        assembled.extend([frames[-1]] * hold_frames)
 
     height, width = assembled[0].shape[:2]
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -189,6 +180,7 @@ def main() -> None:
     if state_path.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
         expected = {
+            "trajectory_strategy": "absolute-one-way-from-original",
             "degrees_per_step": args.degrees_per_step,
             "direction": args.direction,
             "center_crop": args.center_crop,
@@ -205,6 +197,7 @@ def main() -> None:
         original_memory_image.write_bytes(args.image.read_bytes())
         state = {
             "original_image": str(args.image.resolve()),
+            "trajectory_strategy": "absolute-one-way-from-original",
             "degrees_per_step": args.degrees_per_step,
             "direction": args.direction,
             "center_crop": args.center_crop,
@@ -224,7 +217,7 @@ def main() -> None:
     original_constraint = memory_images[0]
     first_step = int(state["completed_steps"]) + 1
     if first_step > total_steps:
-        preview = args.output_dir / "orbit_360.mp4"
+        preview = args.output_dir / "orbit_absolute_keyframes.mp4"
         if not preview.is_file():
             step_dirs = [
                 args.output_dir
@@ -250,8 +243,12 @@ def main() -> None:
         step_dir = args.output_dir / f"step_{step_index:02d}_{cumulative_degrees:03d}deg"
         geometry_dir = step_dir / "geometry"
         generated_video = step_dir / "generated.mp4"
-        latest_image = memory_images[-1]
         selected_images = select_da3_views(memory_images, args.max_da3_views)
+        # render_single_image_orbit uses the last input as the trajectory source.
+        # Keep generated views as optional geometry evidence, but always start the
+        # planned camera path from the original real image.
+        selected_images = [path for path in selected_images if path != original_constraint]
+        selected_images.append(original_constraint)
 
         geometry_command = [
             sys.executable,
@@ -269,7 +266,7 @@ def main() -> None:
             "--frames",
             str(args.frames),
             "--degrees",
-            str(args.degrees_per_step),
+            str(cumulative_degrees),
             "--center-crop",
             str(args.center_crop),
             "--pivot-depth-scale",
@@ -277,7 +274,7 @@ def main() -> None:
             "--direction",
             args.direction,
             "--trajectory-mode",
-            "one-way" if is_closure else "round-trip",
+            "one-way",
             "--fps",
             str(args.fps),
             "--device",
@@ -289,9 +286,7 @@ def main() -> None:
             sys.executable,
             str(SCRIPT_DIR / "generate_with_videox_fun.py"),
             "--image",
-            str(latest_image),
-            "--end-image",
-            str(original_constraint if is_closure else latest_image),
+            str(original_constraint),
             "--reference-image",
             str(original_constraint),
             "--prompt",
@@ -321,6 +316,10 @@ def main() -> None:
             "--device",
             args.device,
         ]
+        if is_closure:
+            generation_command.extend(["--end-image", str(original_constraint)])
+        else:
+            generation_command.append("--no-end-image")
         if args.height is not None:
             generation_command.extend(
                 ["--height", str(args.height), "--width", str(args.width)]
@@ -330,18 +329,18 @@ def main() -> None:
         new_memory_image = None
         if not is_closure:
             new_memory_image = memory_dir / f"view_{cumulative_degrees:03d}.png"
-            save_video_frame(generated_video, args.frames // 2, new_memory_image)
+            save_video_frame(generated_video, args.frames - 1, new_memory_image)
             memory_images.append(new_memory_image.resolve())
 
         step_record = {
             "step": step_index,
             "cumulative_degrees": cumulative_degrees,
             "is_closure": is_closure,
-            "trajectory_mode": "one-way" if is_closure else "round-trip",
+            "trajectory_mode": "absolute-one-way-from-original",
             "center_crop": args.center_crop,
             "pivot_depth_scale": args.pivot_depth_scale,
-            "start_image": str(latest_image),
-            "end_image": str(original_constraint if is_closure else latest_image),
+            "start_image": str(original_constraint),
+            "end_image": str(original_constraint) if is_closure else None,
             "reference_image": str(original_constraint),
             "da3_images": [str(path) for path in selected_images],
             "generated_video": str(generated_video.resolve()),
@@ -362,8 +361,9 @@ def main() -> None:
             / f"step_{index:02d}_{index * args.degrees_per_step:03d}deg"
             for index in range(1, total_steps + 1)
         ]
-        build_orbit_preview(step_dirs, args.output_dir / "orbit_360.mp4", args.fps)
-        print(f"Full orbit complete: {args.output_dir / 'orbit_360.mp4'}")
+        preview = args.output_dir / "orbit_absolute_keyframes.mp4"
+        build_orbit_preview(step_dirs, preview, args.fps)
+        print(f"Full orbit complete: {preview}")
     else:
         print(f"Paused after step {state['completed_steps']}; rerun the same command to resume")
 

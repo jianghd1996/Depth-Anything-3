@@ -129,21 +129,23 @@ selectively add the maximum-angle generated frame to a memory directory, add:
 
 ## Task 3: iterative 360-degree orbit
 
-`run_iterative_orbit.py` expands the memory in 10-degree increments and is
-safe to resume. With the default configuration it performs 36 steps:
+`run_iterative_orbit.py` generates independent absolute targets in 10-degree
+increments and is safe to resume. With the default configuration it performs
+36 steps:
 
-- Steps 1-35 render `0° -> 10° -> 0°` relative to the latest remembered view.
-  VideoX-Fun receives that known view as both endpoint images, and generated
-  frame 40 is stored as the next 10-degree memory view.
-- Step 36 renders a one-way 350° -> 360° closure. Its start constraint is the
-  latest 350-degree memory view and its end constraint is the original input
-  image, so the loop is explicitly closed rather than extrapolated blindly.
+- Each segment starts from the original real image and moves one-way to an
+  absolute target: `0° -> 10°`, `0° -> 20°`, `0° -> 30°`, and so on. Regular
+  segments have no tail-frame constraint; their final frame is stored as the
+  target view.
+- Step 36 renders `0° -> 360°`. Since that endpoint is the original camera, the
+  original image is used as a valid tail-frame closure constraint.
 - DA3 jointly reconstructs from remembered images on every step. To bound Giant
   model memory, at most eight views are sampled uniformly by default, always
   including the original and latest views. Set `--max-da3-views` to change it.
 - VideoX-Fun always receives the original real input through `ref_image`, even
-  when a generated view is used as the current segment's endpoint image. This
-  prevents the reference identity and color from becoming fully autoregressive.
+  for every absolute target. Generated views can contribute to DA3 geometry,
+  but never replace the real image as the generation start or appearance
+  reference.
 
 Start or resume the complete orbit from the repository root:
 
@@ -161,6 +163,6 @@ python scripts/world_model/run_iterative_orbit.py --max-steps-this-run 3
 
 Run the same command again without changing `--output-dir`, direction, or step
 angle to resume from `orbit_state.json`. Each step has its own geometry and
-generated video directory. On completion, outbound halves are assembled into
-`orbit_360.mp4`; the individual round-trip videos remain available for quality
-inspection.
+generated video directory. On completion, the final target frame from every
+segment is assembled into `orbit_absolute_keyframes.mp4`; individual one-way
+videos remain available for quality inspection.
