@@ -176,10 +176,7 @@ def expand_and_load_patch_embedding(transformer, state_dict: dict[str, torch.Ten
         if key.startswith("patch_embedding.")
     }
     if "weight" not in patch_state:
-        raise RuntimeError(
-            "The LoRA checkpoint has no patch_embedding.weight. The mask-aware Control "
-            "checkpoint must include the expanded Conv3d weights."
-        )
+        return state_dict
 
     old = transformer.patch_embedding
     target_in_channels = int(patch_state["weight"].shape[1])
@@ -273,6 +270,18 @@ def main() -> None:
     )
 
     lora_state = load_file(str(args.lora_path), device="cpu")
+    base_control_channels = int(transformer.patch_embedding.in_channels)
+    patch_weight = lora_state.get("patch_embedding.weight")
+    checkpoint_channels = (
+        int(patch_weight.shape[1]) if patch_weight is not None else base_control_channels
+    )
+    if checkpoint_channels not in (base_control_channels, base_control_channels + 4):
+        raise RuntimeError(
+            f"Unsupported checkpoint patch channels: base={base_control_channels}, "
+            f"checkpoint={checkpoint_channels}; expected base or base+4"
+        )
+    use_control_mask = checkpoint_channels == base_control_channels + 4
+    print(f"Control-mask conditioning: {'enabled' if use_control_mask else 'disabled'}")
     lora_state = expand_and_load_patch_embedding(transformer, lora_state)
 
     vae_class = {
@@ -340,8 +349,9 @@ def main() -> None:
         fps=args.fps,
         ref_image=None,
     )
-    control_mask = load_missing_region_mask(
-        args.control_mask, args.frames, height, width
+    control_mask = (
+        load_missing_region_mask(args.control_mask, args.frames, height, width)
+        if use_control_mask else None
     )
     reference_image_path = (
         args.reference_image if args.reference_image is not None else args.image
@@ -413,6 +423,7 @@ def main() -> None:
             if end_image_path is None
             else "known start and end images"
         ),
+        "control_mask_used": use_control_mask,
         "control_mask_convention": "1 = missing DA3 geometry, 0 = valid geometry",
         "memory_mode": "model_full_load",
     }
