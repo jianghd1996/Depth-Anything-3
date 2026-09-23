@@ -25,11 +25,12 @@ def smooth_progress(t):
     return t * t * t * (10 + t * (-15 + 6 * t))
 
 
-def plan_segment(start, end, pivot, frames: int, dolly: float) -> torch.Tensor:
+def plan_segment(start, end, pivot, frames: int, dolly: float, *, level_dolly: bool = False) -> torch.Tensor:
     """Smooth endpoint interpolation with a center-distance dolly at the halfway point.
 
     Camera rotations are interpolated in camera-to-world coordinates. The dolly
     displacement follows the camera-to-pivot ray, in units of starting distance.
+    For level_dolly, its extra displacement is projected onto the camera horizontal plane.
     """
     a = affine_inverse(as_homogeneous(torch.as_tensor(start, dtype=torch.float64))).numpy()
     b = affine_inverse(as_homogeneous(torch.as_tensor(end, dtype=torch.float64))).numpy()
@@ -42,6 +43,12 @@ def plan_segment(start, end, pivot, frames: int, dolly: float) -> torch.Tensor:
     # Keep the push in front of the estimated target surface.
     if dolly < 0 and -dolly >= 0.8:
         raise ValueError("Push fraction must be less than 0.8 of target distance")
+    # OpenCV camera Y points down. The mean photographed camera-up axis
+    # defines the local horizontal plane without assuming a global Z-up scene.
+    up = -(a[:3, 1] + b[:3, 1])
+    if np.linalg.norm(up) < 1e-6:
+        up = -a[:3, 1]
+    up /= np.linalg.norm(up)
     rotations = Rotation.from_matrix(np.stack([a[:3, :3], b[:3, :3]]))
     slerp = Slerp([0, 1], rotations)
     positions = []
@@ -52,6 +59,9 @@ def plan_segment(start, end, pivot, frames: int, dolly: float) -> torch.Tensor:
         # Sin² has zero value and derivative at both photographed endpoints.
         envelope = np.sin(np.pi * ease) ** 2
         direction = (base - p) / max(np.linalg.norm(base - p), 1e-6)
+        if level_dolly:
+            direction = direction - up * np.dot(direction, up)
+            direction /= max(np.linalg.norm(direction), 1e-6)
         positions.append(base + direction * radius * dolly * envelope)
     c2w = np.repeat(np.eye(4)[None], frames, axis=0)
     c2w[:, :3, :3] = slerp(smooth_progress(progress)).as_matrix()
@@ -225,7 +235,7 @@ def main():
                                        pivot, args.frames, args.lift_fraction)
         else:
             poses = plan_segment(prediction.extrinsics[start], prediction.extrinsics[end],
-                                 pivot, args.frames, args.pull_fraction)
+                                 pivot, args.frames, args.pull_fraction, level_dolly=True)
         rgb, depth, valid = render_orbit(prediction, poses, output_hw=output_hw,
             chunk_size=args.chunk_size, alpha_threshold=args.alpha_threshold,
             source_view_index=start)
