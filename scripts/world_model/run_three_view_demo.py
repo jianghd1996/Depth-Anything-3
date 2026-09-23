@@ -115,11 +115,16 @@ def main():
             raise ValueError('Specify all of --left, --middle and --right together')
         images = explicit
     else:
-        images = sorted(p for p in args.images_dir.iterdir()
-                        if p.is_file() and p.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp'))
-        if len(images) != 3:
-            raise ValueError(f'Expected exactly 3 images in {args.images_dir}; found {len(images)}. '
+        candidates = [p for p in args.images_dir.iterdir()
+                      if p.is_file() and p.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp')]
+        if len(candidates) != 3:
+            raise ValueError(f'Expected exactly 3 images in {args.images_dir}; found {len(candidates)}. '
                              'Pass --left, --middle and --right for an explicit selection.')
+        by_prefix = {prefix: [p for p in candidates if p.name.startswith(prefix + '_')]
+                     for prefix in ('0', '1', '2')}
+        if any(len(matches) != 1 for matches in by_prefix.values()):
+            raise ValueError('Cannot identify unique 0_, 1_, 2_ images. Set left/middle/right explicitly.')
+        images = [by_prefix['1'][0], by_prefix['0'][0], by_prefix['2'][0]]
     print('Input order: left={}, middle={}, right={}'.format(*images))
     for path in [*images, args.prompt, args.weights]:
         if not path.is_file():
