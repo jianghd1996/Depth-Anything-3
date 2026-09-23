@@ -20,6 +20,11 @@ from depth_anything_3.world_model import estimate_orbit_pivot, render_orbit
 from render_single_image_orbit import load_checkpoint_weights, write_mp4
 
 
+def smooth_progress(t):
+    """Quintic easing: near-zero speed at endpoints, faster in the middle."""
+    return t * t * t * (10 + t * (-15 + 6 * t))
+
+
 def plan_segment(start, end, pivot, frames: int, dolly: float) -> torch.Tensor:
     """Smooth endpoint interpolation with a center-distance dolly at the halfway point.
 
@@ -42,14 +47,14 @@ def plan_segment(start, end, pivot, frames: int, dolly: float) -> torch.Tensor:
     positions = []
     progress = np.linspace(0, 1, frames)
     for t in progress:
-        ease = 0.5 - 0.5 * np.cos(np.pi * t)
+        ease = smooth_progress(t)
         base = (1 - ease) * ca + ease * cb
         # Sin² has zero value and derivative at both photographed endpoints.
-        envelope = np.sin(np.pi * t) ** 2
+        envelope = np.sin(np.pi * ease) ** 2
         direction = (base - p) / max(np.linalg.norm(base - p), 1e-6)
         positions.append(base + direction * radius * dolly * envelope)
     c2w = np.repeat(np.eye(4)[None], frames, axis=0)
-    c2w[:, :3, :3] = slerp(0.5 - 0.5 * np.cos(np.pi * progress)).as_matrix()
+    c2w[:, :3, :3] = slerp(smooth_progress(progress)).as_matrix()
     c2w[:, :3, 3] = np.asarray(positions)
     c2w[0], c2w[-1] = a, b
     return affine_inverse(torch.from_numpy(c2w).float())
@@ -64,7 +69,7 @@ def plan_crane_segment(start, end, pivot, frames: int, lift_fraction: float) -> 
     up = up / up.norm().clamp_min(1e-8)
     radius = (start_c2w[:3, 3] - torch.as_tensor(pivot, dtype=torch.float64)).norm()
     t = torch.linspace(0, 1, frames, dtype=torch.float64)
-    c2w[:, :3, 3] += (radius * lift_fraction * torch.sin(torch.pi * t).square())[:, None] * up
+    c2w[:, :3, 3] += (radius * lift_fraction * torch.sin(torch.pi * smooth_progress(t)).square())[:, None] * up
     return affine_inverse(c2w).float()
 
 
@@ -203,8 +208,8 @@ def main():
         center_crop=args.center_crop, depth_scale=args.pivot_depth_scale)
         for i in range(3)]
     pivot = torch.stack(pivots).median(dim=0).values
-    specs = [('middle_left_push', 1, 0, 'push'),
-             ('left_right_lift', 0, 2, 'lift'),
+    specs = [('left_middle_push', 0, 1, 'push'),
+             ('middle_right_lift', 1, 2, 'lift'),
              ('right_middle_pull', 2, 1, 'pull')]
     metadata = {'images': [str(x) for x in images], 'pivot_world': pivot.tolist(),
                 'frames_per_clip': args.frames, 'fps': args.fps, 'segments': []}
