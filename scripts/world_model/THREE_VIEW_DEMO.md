@@ -4,7 +4,7 @@ Run from the repository root. Supply three photographs of the same target in lef
 
 ```bash
 PYTHONPATH="$PWD/src" CUDA_VISIBLE_DEVICES=5 python scripts/world_model/run_three_view_demo.py \
-  --left /path/to/left.jpg --middle /path/to/middle.jpg --right /path/to/right.jpg \
+  --images-dir /home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/3image \
   --prompt /path/to/prompt.txt --weights /path/to/DA3.pt \
   --video-model /path/to/Wan2.2-Fun-5B-Control \
   --lora-path /path/to/12000_lora.safetensors \
@@ -17,3 +17,5 @@ Start with `--render-only` (omit the video model and LoRA options) to review `gs
 DA3 camera estimates across three images must be consistent for a meaningful trajectory. The endpoint photographs constrain the video model, but exact pixel equality at the ends is not guaranteed by the model. The last output is `demo.mp4`; the two generated clips remain available for inspection. Set `--height` and `--width` to multiples of 32 and match the aspect ratio of the input photos.
 
 The 12000-step LoRA is assumed to predate control-mask training. The inference adapter inspects checkpoint patch-input channels and skips `control_mask` for the original layout; the DA3 mask preview is still saved for diagnostics. If the provided checkpoint has the expanded 4-channel mask layout, the adapter enables it automatically.
+
+With `--images-dir`, the script accepts exactly three JPG/PNG/WebP images and maps sorted filenames to left, middle, right. Check the printed mapping before rendering. If filenames do not sort in camera order, pass all three `--left`, `--middle`, `--right` paths explicitly.
