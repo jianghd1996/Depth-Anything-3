@@ -57,14 +57,14 @@ def plan_segment(start, end, pivot, frames: int, dolly: float) -> torch.Tensor:
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--images-dir', type=Path, default=Path(
-        '/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/3image'))
+    parser.add_argument('--config', type=Path, default=Path(__file__).with_name('configs') / 'three_view_demo.json')
+    parser.add_argument('--images-dir', type=Path)
     parser.add_argument('--left', type=Path)
     parser.add_argument('--middle', type=Path)
     parser.add_argument('--right', type=Path)
-    parser.add_argument('--prompt', type=Path, required=True)
-    parser.add_argument('--weights', type=Path, required=True)
-    parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--prompt', type=Path)
+    parser.add_argument('--weights', type=Path)
+    parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--model-name', default='da3nested-giant-large')
     parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--process-res', type=int, default=504)
@@ -83,10 +83,28 @@ def parse_args():
     parser.add_argument('--lora-weight', type=float, default=1.0)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--video-model', type=Path)
-    parser.add_argument('--lora-path', type=Path, default=Path(
-        '/home/z00566689/dev/mnt/SingleRecon/Cloud_Models/Wan2.2-Fun-5B-Control/12000_lora.safetensors'))
+    parser.add_argument('--lora-path', type=Path)
     parser.add_argument('--render-only', action='store_true', help='Preview DA3 geometry without loading VideoX-Fun')
-    return parser.parse_args()
+    config_option, _ = parser.parse_known_args()
+    if not config_option.config.is_file():
+        parser.error(f'Config file does not exist: {config_option.config}')
+    settings = json.loads(config_option.config.read_text(encoding='utf-8'))
+    if not isinstance(settings, dict):
+        parser.error('Config must contain a JSON object')
+    actions = {action.dest: action for action in parser._actions}
+    for key, value in settings.items():
+        if key not in actions or key in ('help', 'config'):
+            parser.error(f'Unknown config key: {key}')
+        if value is not None and actions[key].type is Path:
+            settings[key] = Path(value)
+    parser.set_defaults(**settings)
+    args = parser.parse_args()
+    for name in ('prompt', 'weights', 'output_dir'):
+        if getattr(args, name) is None:
+            parser.error(f'--{name.replace("_", "-")} must be set in config or CLI')
+    if args.images_dir is None and not all((args.left, args.middle, args.right)):
+        parser.error('Set images_dir or all three explicit image paths')
+    return args
 
 
 def main():
