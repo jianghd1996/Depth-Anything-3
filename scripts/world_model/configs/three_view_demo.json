@@ -15,7 +15,9 @@
   "guidance_scale": 6.0,
   "lora_weight": 1.0,
   "push_fraction": 0.18,
-  "pull_fraction": 0.18,
   "height": null,
-  "width": null
+  "width": null,
+  "lift_fraction": 0.1,
+  "pull_fraction": 0.2,
+  "crossfade_frames": 6
 }
