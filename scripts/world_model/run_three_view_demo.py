@@ -57,9 +57,11 @@ def plan_segment(start, end, pivot, frames: int, dolly: float) -> torch.Tensor:
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--left', type=Path, required=True)
-    parser.add_argument('--middle', type=Path, required=True)
-    parser.add_argument('--right', type=Path, required=True)
+    parser.add_argument('--images-dir', type=Path, default=Path(
+        '/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/3image'))
+    parser.add_argument('--left', type=Path)
+    parser.add_argument('--middle', type=Path)
+    parser.add_argument('--right', type=Path)
     parser.add_argument('--prompt', type=Path, required=True)
     parser.add_argument('--weights', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
@@ -89,7 +91,18 @@ def parse_args():
 
 def main():
     args = parse_args()
-    images = [args.left, args.middle, args.right]
+    explicit = [args.left, args.middle, args.right]
+    if any(explicit):
+        if not all(explicit):
+            raise ValueError('Specify all of --left, --middle and --right together')
+        images = explicit
+    else:
+        images = sorted(p for p in args.images_dir.iterdir()
+                        if p.is_file() and p.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp'))
+        if len(images) != 3:
+            raise ValueError(f'Expected exactly 3 images in {args.images_dir}; found {len(images)}. '
+                             'Pass --left, --middle and --right for an explicit selection.')
+    print('Input order: left={}, middle={}, right={}'.format(*images))
     for path in [*images, args.prompt, args.weights]:
         if not path.is_file():
             raise FileNotFoundError(path)
