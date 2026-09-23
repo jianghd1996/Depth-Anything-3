@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render two cinematic three-view moves, generate endpoint-conditioned clips, and join them."""
+"""Render three cinematic moves, generate endpoint-conditioned clips, and join them."""
 from __future__ import annotations
 
 import argparse
@@ -37,7 +37,7 @@ def resample_constant_speed(c2w: np.ndarray, frames: int) -> torch.Tensor:
     return affine_inverse(torch.from_numpy(sampled).float())
 
 
-def plan_segment(start, end, pivot, frames: int, dolly: float, *, level_dolly: bool = False) -> torch.Tensor:
+def plan_segment(start, end, pivot, frames: int, dolly: float, *, level_dolly: bool = False, yaw_degrees: float = 0.0) -> torch.Tensor:
     """Smooth endpoint interpolation with a center-distance dolly at the halfway point.
 
     Camera rotations are interpolated in camera-to-world coordinates. The dolly
@@ -76,15 +76,21 @@ def plan_segment(start, end, pivot, frames: int, dolly: float, *, level_dolly: b
             direction /= max(np.linalg.norm(direction), 1e-6)
         positions.append(base + direction * radius * dolly * envelope)
     c2w = np.repeat(np.eye(4)[None], len(progress), axis=0)
-    c2w[:, :3, :3] = slerp(progress).as_matrix()
+    base_rotations = slerp(progress)
+    local_yaw = Rotation.from_rotvec(np.column_stack([
+        np.zeros(len(progress)),
+        -np.deg2rad(yaw_degrees) * np.sin(np.pi * progress),
+        np.zeros(len(progress)),
+    ]))
+    c2w[:, :3, :3] = (base_rotations * local_yaw).as_matrix()
     c2w[:, :3, 3] = np.asarray(positions)
     c2w[0], c2w[-1] = a, b
     return resample_constant_speed(c2w, frames)
 
 
-def plan_crane_segment(start, end, pivot, frames: int, lift_fraction: float) -> torch.Tensor:
+def plan_crane_segment(start, end, pivot, frames: int, lift_fraction: float, yaw_degrees: float) -> torch.Tensor:
     """Move left-to-right with a gentle raised camera midway; preserve both poses."""
-    poses = plan_segment(start, end, pivot, frames, 0.0)
+    poses = plan_segment(start, end, pivot, frames, 0.0, yaw_degrees=yaw_degrees)
     c2w = affine_inverse(poses.double())
     start_c2w = affine_inverse(as_homogeneous(torch.as_tensor(start, dtype=torch.float64)))
     up = -start_c2w[:3, 1]
@@ -95,30 +101,15 @@ def plan_crane_segment(start, end, pivot, frames: int, lift_fraction: float) -> 
     return resample_constant_speed(c2w.numpy(), frames)
 
 
-def stitch_clips(clips: list, fps: int, overlap_frames: int):
-    """Fade color correction away from each seam, then crossfade the moving clips."""
-    if overlap_frames < 1 or overlap_frames >= min(round(c.duration * fps) for c in clips) // 4:
-        raise ValueError('Crossfade must be positive and shorter than a quarter clip')
-    corrected = [clips[0]]
-    for clip in clips[1:]:
-        previous = corrected[-1]
-        before = previous.get_frame(max(0, previous.duration - 1 / fps)).astype(np.float32)
-        after = clip.get_frame(0).astype(np.float32)
-        # Robust central-region means avoid the black geometry border and outliers.
-        h, w = before.shape[:2]
-        area = (slice(h // 4, 3 * h // 4), slice(w // 4, 3 * w // 4))
-        target = before[area].mean(axis=(0, 1))
-        source = after[area].mean(axis=(0, 1))
-        gain = np.clip(target / np.maximum(source, 16), 0.85, 1.15)
-        fade_duration = max(0.75, overlap_frames / fps * 2)
-        adjusted = clip.fl(lambda gf, t, gain=gain, fade=fade_duration:
-            np.clip(gf(t).astype(np.float32) *
-                    (1 + (gain - 1) * max(0.0, 1 - t / fade)), 0, 255).astype(np.uint8),
-            keep_duration=True)
-        corrected.append(adjusted)
-    return mpy.concatenate_videoclips(
-        [corrected[0]] + [c.crossfadein(overlap_frames / fps) for c in corrected[1:]],
-        method='compose', padding=-overlap_frames / fps)
+def join_original_clips(paths: list[Path], output: Path) -> None:
+    """Join encoded clips without overlap, dropped frames, filtering, or re-encoding."""
+    manifest = output.parent / 'concat_inputs.txt'
+    # ffmpeg concat demuxer needs absolute paths; quote escaping is for its file syntax.
+    manifest.write_text(''.join(
+        "file '" + str(path.resolve()).replace("'", "'\\''") + "'\n"
+        for path in paths), encoding='utf-8')
+    subprocess.run(['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', str(manifest),
+                    '-c', 'copy', str(output)], check=True)
 
 
 def parse_args():
@@ -139,7 +130,7 @@ def parse_args():
     parser.add_argument('--push-fraction', type=float, default=0.18)
     parser.add_argument('--lift-fraction', type=float, default=0.10)
     parser.add_argument('--pull-fraction', type=float, default=0.20)
-    parser.add_argument('--crossfade-frames', type=int, default=6)
+    parser.add_argument('--yaw-degrees', type=float, default=18.0)
     parser.add_argument('--center-crop', type=float, default=0.4)
     parser.add_argument('--pivot-depth-scale', type=float, default=1.0)
     parser.add_argument('--alpha-threshold', type=float, default=0.01)
@@ -201,8 +192,8 @@ def main():
         raise ValueError('Frames must be at least 5 and satisfy (frames - 1) % 4 == 0')
     if args.fps < 1 or args.chunk_size < 1:
         raise ValueError('fps and chunk-size must be positive')
-    if not 0 <= args.push_fraction < 0.8 or args.pull_fraction < 0 or args.lift_fraction < 0:
-        raise ValueError('push-fraction must be in [0, 0.8); pull-fraction and lift-fraction must be nonnegative')
+    if not 0 <= args.push_fraction < 0.8 or args.pull_fraction < 0 or args.lift_fraction < 0 or not 0 <= args.yaw_degrees <= 45:
+        raise ValueError('push-fraction must be in [0, 0.8); pull/lift nonnegative; yaw-degrees in [0, 45]')
     if (args.height is None) != (args.width is None):
         raise ValueError('Specify height and width together')
     if args.height is not None and (args.height % 32 or args.width % 32):
@@ -241,13 +232,14 @@ def main():
         folder.mkdir(parents=True, exist_ok=True)
         if trajectory_type == 'push':
             poses = plan_segment(prediction.extrinsics[start], prediction.extrinsics[end],
-                                 pivot, args.frames, -args.push_fraction)
+                                 pivot, args.frames, -args.push_fraction, yaw_degrees=args.yaw_degrees)
         elif trajectory_type == 'lift':
             poses = plan_crane_segment(prediction.extrinsics[start], prediction.extrinsics[end],
-                                       pivot, args.frames, args.lift_fraction)
+                                       pivot, args.frames, args.lift_fraction, -args.yaw_degrees)
         else:
             poses = plan_segment(prediction.extrinsics[start], prediction.extrinsics[end],
-                                 pivot, args.frames, args.pull_fraction, level_dolly=True)
+                                 pivot, args.frames, args.pull_fraction, level_dolly=True,
+                                 yaw_degrees=args.yaw_degrees)
         rgb, depth, valid = render_orbit(prediction, poses, output_hw=output_hw,
             chunk_size=args.chunk_size, alpha_threshold=args.alpha_threshold,
             source_view_index=start)
@@ -281,18 +273,10 @@ def main():
     if args.render_only:
         print('Geometry previews and trajectories saved to', args.output_dir)
         return
-    clips = [mpy.VideoFileClip(str(args.output_dir / name / 'generated.mp4'))
-             for name, *_ in specs]
-    try:
-        joined = stitch_clips(clips, args.fps, args.crossfade_frames)
-        try:
-            joined.write_videofile(str(args.output_dir / 'demo.mp4'), codec='libx264',
-                audio=False, fps=args.fps, ffmpeg_params=['-crf', '18', '-pix_fmt', 'yuv420p'])
-        finally:
-            joined.close()
-    finally:
-        for clip in clips:
-            clip.close()
+    join_original_clips(
+        [args.output_dir / name / 'generated.mp4' for name, *_ in specs],
+        args.output_dir / 'demo.mp4',
+    )
     print('Demo saved to', args.output_dir / 'demo.mp4')
 
 
