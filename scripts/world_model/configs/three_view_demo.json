@@ -1,8 +1,8 @@
 {
   "images_dir": "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/3image",
-  "left": null,
-  "middle": null,
-  "right": null,
+  "left": "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/3image/1_tmp8rnv8uyq4K_22858784786000.jpg",
+  "middle": "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/3image/0_tmp4fo810nn4K_22854602392000.jpg",
+  "right": "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/3image/2_tmpms9z1faj4K_22862805404000.jpg",
   "prompt": "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/prompt.txt",
   "weights": "/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev/DA3.pt",
   "video_model": "/home/z00566689/dev/mnt/SingleRecon/Cloud_Models/Wan2.2-Fun-5B-Control",
