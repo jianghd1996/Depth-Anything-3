@@ -20,9 +20,21 @@ from depth_anything_3.world_model import estimate_orbit_pivot, render_orbit
 from render_single_image_orbit import load_checkpoint_weights, write_mp4
 
 
-def smooth_progress(t):
-    """Quintic easing: near-zero speed at endpoints, faster in the middle."""
-    return t * t * t * (10 + t * (-15 + 6 * t))
+def resample_constant_speed(c2w: np.ndarray, frames: int) -> torch.Tensor:
+    """Sample camera positions at equal arc-length intervals, preserving endpoints."""
+    centers = c2w[:, :3, 3]
+    cumulative = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(centers, axis=0), axis=1))]
+    if cumulative[-1] < 1e-8:
+        raise ValueError('DA3 camera positions coincide; cannot plan a moving shot')
+    keep = np.r_[True, np.diff(cumulative) > 1e-9]
+    distance = np.linspace(0, cumulative[-1], frames)
+    sampled = np.repeat(np.eye(4)[None], frames, axis=0)
+    for axis in range(3):
+        sampled[:, axis, 3] = np.interp(distance, cumulative[keep], centers[keep, axis])
+    rotations = Rotation.from_matrix(c2w[keep, :3, :3])
+    sampled[:, :3, :3] = Slerp(cumulative[keep], rotations)(distance).as_matrix()
+    sampled[0], sampled[-1] = c2w[0], c2w[-1]
+    return affine_inverse(torch.from_numpy(sampled).float())
 
 
 def plan_segment(start, end, pivot, frames: int, dolly: float, *, level_dolly: bool = False) -> torch.Tensor:
@@ -52,9 +64,9 @@ def plan_segment(start, end, pivot, frames: int, dolly: float, *, level_dolly: b
     rotations = Rotation.from_matrix(np.stack([a[:3, :3], b[:3, :3]]))
     slerp = Slerp([0, 1], rotations)
     positions = []
-    progress = np.linspace(0, 1, frames)
+    progress = np.linspace(0, 1, max(frames * 8, 64))
     for t in progress:
-        ease = smooth_progress(t)
+        ease = t
         base = (1 - ease) * ca + ease * cb
         # Sin² has zero value and derivative at both photographed endpoints.
         envelope = np.sin(np.pi * ease) ** 2
@@ -63,11 +75,11 @@ def plan_segment(start, end, pivot, frames: int, dolly: float, *, level_dolly: b
             direction = direction - up * np.dot(direction, up)
             direction /= max(np.linalg.norm(direction), 1e-6)
         positions.append(base + direction * radius * dolly * envelope)
-    c2w = np.repeat(np.eye(4)[None], frames, axis=0)
-    c2w[:, :3, :3] = slerp(smooth_progress(progress)).as_matrix()
+    c2w = np.repeat(np.eye(4)[None], len(progress), axis=0)
+    c2w[:, :3, :3] = slerp(progress).as_matrix()
     c2w[:, :3, 3] = np.asarray(positions)
     c2w[0], c2w[-1] = a, b
-    return affine_inverse(torch.from_numpy(c2w).float())
+    return resample_constant_speed(c2w, frames)
 
 
 def plan_crane_segment(start, end, pivot, frames: int, lift_fraction: float) -> torch.Tensor:
@@ -79,8 +91,8 @@ def plan_crane_segment(start, end, pivot, frames: int, lift_fraction: float) -> 
     up = up / up.norm().clamp_min(1e-8)
     radius = (start_c2w[:3, 3] - torch.as_tensor(pivot, dtype=torch.float64)).norm()
     t = torch.linspace(0, 1, frames, dtype=torch.float64)
-    c2w[:, :3, 3] += (radius * lift_fraction * torch.sin(torch.pi * smooth_progress(t)).square())[:, None] * up
-    return affine_inverse(c2w).float()
+    c2w[:, :3, 3] += (radius * lift_fraction * torch.sin(torch.pi * t).square())[:, None] * up
+    return resample_constant_speed(c2w.numpy(), frames)
 
 
 def stitch_clips(clips: list, fps: int, overlap_frames: int):
