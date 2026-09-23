@@ -55,6 +55,45 @@ def plan_segment(start, end, pivot, frames: int, dolly: float) -> torch.Tensor:
     return affine_inverse(torch.from_numpy(c2w).float())
 
 
+def plan_crane_segment(start, end, pivot, frames: int, lift_fraction: float) -> torch.Tensor:
+    """Move left-to-right with a gentle raised camera midway; preserve both poses."""
+    poses = plan_segment(start, end, pivot, frames, 0.0)
+    c2w = affine_inverse(poses.double())
+    start_c2w = affine_inverse(as_homogeneous(torch.as_tensor(start, dtype=torch.float64)))
+    up = -start_c2w[:3, 1]
+    up = up / up.norm().clamp_min(1e-8)
+    radius = (start_c2w[:3, 3] - torch.as_tensor(pivot, dtype=torch.float64)).norm()
+    t = torch.linspace(0, 1, frames, dtype=torch.float64)
+    c2w[:, :3, 3] += (radius * lift_fraction * torch.sin(torch.pi * t).square())[:, None] * up
+    return affine_inverse(c2w).float()
+
+
+def stitch_clips(clips: list, fps: int, overlap_frames: int):
+    """Fade color correction away from each seam, then crossfade the moving clips."""
+    if overlap_frames < 1 or overlap_frames >= min(round(c.duration * fps) for c in clips) // 4:
+        raise ValueError('Crossfade must be positive and shorter than a quarter clip')
+    corrected = [clips[0]]
+    for clip in clips[1:]:
+        previous = corrected[-1]
+        before = previous.get_frame(max(0, previous.duration - 1 / fps)).astype(np.float32)
+        after = clip.get_frame(0).astype(np.float32)
+        # Robust central-region means avoid the black geometry border and outliers.
+        h, w = before.shape[:2]
+        area = (slice(h // 4, 3 * h // 4), slice(w // 4, 3 * w // 4))
+        target = before[area].mean(axis=(0, 1))
+        source = after[area].mean(axis=(0, 1))
+        gain = np.clip(target / np.maximum(source, 16), 0.85, 1.15)
+        fade_duration = max(0.75, overlap_frames / fps * 2)
+        adjusted = clip.fl(lambda gf, t, gain=gain, fade=fade_duration:
+            np.clip(gf(t).astype(np.float32) *
+                    (1 + (gain - 1) * max(0.0, 1 - t / fade)), 0, 255).astype(np.uint8),
+            keep_duration=True)
+        corrected.append(adjusted)
+    return mpy.concatenate_videoclips(
+        [corrected[0]] + [c.crossfadein(overlap_frames / fps) for c in corrected[1:]],
+        method='compose', padding=-overlap_frames / fps)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=Path(__file__).with_name('configs') / 'three_view_demo.json')
@@ -71,7 +110,9 @@ def parse_args():
     parser.add_argument('--frames', type=int, default=81)
     parser.add_argument('--fps', type=int, default=24)
     parser.add_argument('--push-fraction', type=float, default=0.18)
-    parser.add_argument('--pull-fraction', type=float, default=0.18)
+    parser.add_argument('--lift-fraction', type=float, default=0.10)
+    parser.add_argument('--pull-fraction', type=float, default=0.20)
+    parser.add_argument('--crossfade-frames', type=int, default=6)
     parser.add_argument('--center-crop', type=float, default=0.4)
     parser.add_argument('--pivot-depth-scale', type=float, default=1.0)
     parser.add_argument('--alpha-threshold', type=float, default=0.01)
@@ -133,8 +174,8 @@ def main():
         raise ValueError('Frames must be at least 5 and satisfy (frames - 1) % 4 == 0')
     if args.fps < 1 or args.chunk_size < 1:
         raise ValueError('fps and chunk-size must be positive')
-    if not 0 <= args.push_fraction < 0.8 or args.pull_fraction < 0:
-        raise ValueError('push-fraction must be in [0, 0.8); pull-fraction must be nonnegative')
+    if not 0 <= args.push_fraction < 0.8 or args.pull_fraction < 0 or args.lift_fraction < 0:
+        raise ValueError('push-fraction must be in [0, 0.8); pull-fraction and lift-fraction must be nonnegative')
     if (args.height is None) != (args.width is None):
         raise ValueError('Specify height and width together')
     if args.height is not None and (args.height % 32 or args.width % 32):
@@ -162,16 +203,24 @@ def main():
         center_crop=args.center_crop, depth_scale=args.pivot_depth_scale)
         for i in range(3)]
     pivot = torch.stack(pivots).median(dim=0).values
-    specs = [('left_middle', 0, 1, -args.push_fraction),
-             ('middle_right', 1, 2, args.pull_fraction)]
+    specs = [('middle_left_push', 1, 0, 'push'),
+             ('left_right_lift', 0, 2, 'lift'),
+             ('right_middle_pull', 2, 1, 'pull')]
     metadata = {'images': [str(x) for x in images], 'pivot_world': pivot.tolist(),
                 'frames_per_clip': args.frames, 'fps': args.fps, 'segments': []}
     output_hw = (args.height, args.width) if args.height else None
-    for name, start, end, dolly in specs:
+    for name, start, end, trajectory_type in specs:
         folder = args.output_dir / name
         folder.mkdir(parents=True, exist_ok=True)
-        poses = plan_segment(prediction.extrinsics[start], prediction.extrinsics[end],
-                             pivot, args.frames, dolly)
+        if trajectory_type == 'push':
+            poses = plan_segment(prediction.extrinsics[start], prediction.extrinsics[end],
+                                 pivot, args.frames, -args.push_fraction)
+        elif trajectory_type == 'lift':
+            poses = plan_crane_segment(prediction.extrinsics[start], prediction.extrinsics[end],
+                                       pivot, args.frames, args.lift_fraction)
+        else:
+            poses = plan_segment(prediction.extrinsics[start], prediction.extrinsics[end],
+                                 pivot, args.frames, args.pull_fraction)
         rgb, depth, valid = render_orbit(prediction, poses, output_hw=output_hw,
             chunk_size=args.chunk_size, alpha_threshold=args.alpha_threshold,
             source_view_index=start)
@@ -183,13 +232,13 @@ def main():
         np.savez_compressed(folder / 'camera_trajectory.npz', extrinsics=poses.numpy(),
             pivot_world=pivot.numpy(), rendered_depth=depth.float().cpu().numpy())
         metadata['segments'].append({'name': name, 'start': str(images[start]),
-            'end': str(images[end]), 'dolly_fraction': dolly,
+            'end': str(images[end]), 'trajectory_type': trajectory_type,
             'minimum_valid_fraction': float(valid.float().mean(dim=(1,2)).min())})
         if args.render_only:
             continue
         command = [sys.executable, str(Path(__file__).with_name('generate_with_videox_fun.py')),
             '--image', str(images[start]), '--end-image', str(images[end]),
-            '--reference-image', str(images[start]), '--prompt', str(args.prompt),
+            '--reference-image', str(images[end]), '--prompt', str(args.prompt),
             '--control-video', str(folder / 'gs_render.mp4'),
             '--control-mask', str(folder / 'mask.mp4'),
             '--model-path', str(args.video_model), '--lora-path', str(args.lora_path),
@@ -208,9 +257,7 @@ def main():
     clips = [mpy.VideoFileClip(str(args.output_dir / name / 'generated.mp4'))
              for name, *_ in specs]
     try:
-        # Discard one duplicate middle-view frame at the join.
-        joined = mpy.concatenate_videoclips(
-            [clips[0], clips[1].subclip(1 / args.fps)], method='compose')
+        joined = stitch_clips(clips, args.fps, args.crossfade_frames)
         try:
             joined.write_videofile(str(args.output_dir / 'demo.mp4'), codec='libx264',
                 audio=False, fps=args.fps, ffmpeg_params=['-crf', '18', '-pix_fmt', 'yuv420p'])
