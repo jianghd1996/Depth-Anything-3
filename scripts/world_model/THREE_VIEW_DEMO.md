@@ -14,7 +14,7 @@ DA3 camera estimates across three images must be consistent for a meaningful tra
 
 The 12000-step LoRA is assumed to predate control-mask training. The inference adapter inspects checkpoint patch-input channels and skips `control_mask` for the original layout; the DA3 mask preview is still saved for diagnostics. If the provided checkpoint has the expanded 4-channel mask layout, the adapter enables it automatically.
 
-The supplied three images are explicitly mapped in the config: `1_` is left, `0_` is middle, and `2_` is right. Without explicit image paths, directory mode requires unique `0_`, `1_`, `2_` prefixes and uses the same mapping. It never guesses camera direction from image content.
+The config reads the current images in `3image` on each run: `1_` is left, `0_` is middle, and `2_` is right. Directory mode requires exactly three images with unique `0_`, `1_`, `2_` prefixes. It never guesses camera direction from image content.
 
 To use a different config, pass `--config /path/to/config.json`. Command-line options override config values. Set `left`, `middle`, and `right` to explicit image paths in the config if filename sorting does not match the camera order.
 
