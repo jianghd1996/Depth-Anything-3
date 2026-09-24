@@ -137,6 +137,8 @@ def parse_args():
     parser.add_argument('--chunk-size', type=int, default=4)
     parser.add_argument('--height', type=int)
     parser.add_argument('--width', type=int)
+    parser.add_argument('--short-edge', type=int, default=1088)
+    parser.add_argument('--long-edge', type=int, default=1920)
     parser.add_argument('--steps', type=int, default=8)
     parser.add_argument('--guidance-scale', type=float, default=6.0)
     parser.add_argument('--lora-weight', type=float, default=1.0)
@@ -198,6 +200,16 @@ def main():
         raise ValueError('Specify height and width together')
     if args.height is not None and (args.height % 32 or args.width % 32):
         raise ValueError('Output dimensions must be multiples of 32')
+    if args.short_edge < 32 or args.long_edge < args.short_edge or args.short_edge % 32 or args.long_edge % 32:
+        raise ValueError('short-edge and long-edge must be positive multiples of 32, long >= short')
+    if args.height is not None:
+        generation_hw = (args.height, args.width)
+    else:
+        with Image.open(images[0]) as source_image:
+            image_width, image_height = source_image.size
+        generation_hw = ((args.short_edge, args.long_edge) if image_width >= image_height
+                         else (args.long_edge, args.short_edge))
+    print(f'Generation resolution: {generation_hw[1]}x{generation_hw[0]} (width x height)')
     if not args.render_only:
         for path in [args.video_model, args.lora_path]:
             if path is None or not path.exists():
@@ -225,8 +237,12 @@ def main():
              ('middle_right_lift', 1, 2, 'lift'),
              ('right_middle_pull', 2, 1, 'pull')]
     metadata = {'images': [str(x) for x in images], 'pivot_world': pivot.tolist(),
-                'frames_per_clip': args.frames, 'fps': args.fps, 'segments': []}
-    output_hw = (args.height, args.width) if args.height else None
+                'frames_per_clip': args.frames, 'fps': args.fps,
+                'generation_resolution_hw': list(generation_hw),
+                'guidance_scale': args.guidance_scale, 'segments': []}
+    # DA3 geometry stays at its reconstruction resolution. VideoX-Fun resizes
+    # guidance to generation_hw, avoiding 81 high-res render frames in GPU memory.
+    output_hw = None
     for name, start, end, trajectory_type in specs:
         folder = args.output_dir / name
         folder.mkdir(parents=True, exist_ok=True)
@@ -266,8 +282,7 @@ def main():
             '--guidance-scale', str(args.guidance_scale),
             '--lora-weight', str(args.lora_weight), '--seed', str(args.seed + start),
             '--device', args.device]
-        if output_hw:
-            command += ['--height', str(args.height), '--width', str(args.width)]
+        command += ['--height', str(generation_hw[0]), '--width', str(generation_hw[1])]
         subprocess.run(command, check=True)
     (args.output_dir / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
     if args.render_only:
