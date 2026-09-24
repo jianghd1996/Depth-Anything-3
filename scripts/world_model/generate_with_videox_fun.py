@@ -75,7 +75,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--guidance-scale", type=float, default=6.0)
-    parser.add_argument("--lora-weight", type=float, default=1.0)
+    parser.add_argument("--lora-weight", type=float, default=0.55)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--shift", type=float, default=5.0)
     parser.add_argument("--device", default="cuda:0")

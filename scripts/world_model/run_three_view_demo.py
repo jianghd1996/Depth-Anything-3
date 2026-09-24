@@ -101,7 +101,7 @@ def parse_args(argv=None):
     parser.add_argument('--long-edge', type=int, default=1920)
     parser.add_argument('--steps', type=int, default=8)
     parser.add_argument('--guidance-scale', type=float, default=6.0)
-    parser.add_argument('--lora-weight', type=float, default=1.0)
+    parser.add_argument('--lora-weight', type=float, default=0.55)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--video-model', type=Path)
     parser.add_argument('--lora-path', type=Path)

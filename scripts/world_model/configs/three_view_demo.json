@@ -13,7 +13,7 @@
   "fps": 24,
   "steps": 8,
   "guidance_scale": 0.0,
-  "lora_weight": 1.0,
+  "lora_weight": 0.55,
   "height": null,
   "width": null,
   "short_edge": 1088,
