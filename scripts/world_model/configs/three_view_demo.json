@@ -21,5 +21,6 @@
   "pull_fraction": 0.6,
   "yaw_degrees": 18.0,
   "short_edge": 1088,
-  "long_edge": 1920
+  "long_edge": 1920,
+  "process_res": 840
 }
