@@ -21,4 +21,4 @@ To use a different config, pass `--config /path/to/config.json`. Command-line op
 
 The optional `yaw_degrees` setting defaults to 18°. Camera yaw is strongest near the middle of each segment and zero at both photographed endpoints, so the supplied views remain fixed. Large yaw can reveal geometry with weak DA3 coverage; check the per-segment `mask.mp4`.
 
-Default generation is 1920×1088 (landscape) or 1088×1920 (portrait), selected from the first image; the config uses `guidance_scale=0`. The vendored pipeline enables classifier-free guidance only when the scale exceeds 1, so 0 runs one conditional denoising pass without the unconditional branch. DA3 geometry remains at reconstruction resolution and is resized for 1080P inference.
+Default generation is 1920×1088 (landscape) or 1088×1920 (portrait), selected from the first image; the config uses `guidance_scale=0`. The vendored pipeline enables classifier-free guidance only when the scale exceeds 1, so 0 runs one conditional denoising pass without the unconditional branch. DA3 uses `process_res=840`, and geometry remains at reconstruction resolution and is resized for 1080P inference.
