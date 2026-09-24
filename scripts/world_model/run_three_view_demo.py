@@ -20,14 +20,17 @@ from depth_anything_3.world_model import estimate_orbit_pivot, render_orbit
 from render_single_image_orbit import load_checkpoint_weights, write_mp4
 
 
-def resample_constant_speed(c2w: np.ndarray, frames: int) -> torch.Tensor:
-    """Sample camera positions at equal arc-length intervals, preserving endpoints."""
+def resample_constant_speed(c2w: np.ndarray, frames: int, *, ease_ends: bool = False) -> torch.Tensor:
+    """Sample by traveled distance, optionally slowing at turning points."""
     centers = c2w[:, :3, 3]
     cumulative = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(centers, axis=0), axis=1))]
     if cumulative[-1] < 1e-8:
         raise ValueError('DA3 camera positions coincide; cannot plan a moving shot')
     keep = np.r_[True, np.diff(cumulative) > 1e-9]
-    distance = np.linspace(0, cumulative[-1], frames)
+    progress = np.linspace(0.0, 1.0, frames)
+    if ease_ends:
+        progress = progress * progress * (3 - 2 * progress)
+    distance = progress * cumulative[-1]
     sampled = np.repeat(np.eye(4)[None], frames, axis=0)
     for axis in range(3):
         sampled[:, axis, 3] = np.interp(distance, cumulative[keep], centers[keep, axis])
@@ -37,8 +40,8 @@ def resample_constant_speed(c2w: np.ndarray, frames: int) -> torch.Tensor:
     return affine_inverse(torch.from_numpy(sampled).float())
 
 
-def plan_spherical_segment(start, end, pivot, frames: int) -> torch.Tensor:
-    """Orbit the target with stable framing and exact photographed endpoint poses."""
+def plan_spherical_segment(start, end, pivot, frames: int, dolly_fraction: float) -> torch.Tensor:
+    """Orbit the target, dolly at mid-shot, and preserve photographed endpoints."""
     a = affine_inverse(as_homogeneous(torch.as_tensor(start, dtype=torch.float64))).numpy()
     b = affine_inverse(as_homogeneous(torch.as_tensor(end, dtype=torch.float64))).numpy()
     center = np.asarray(pivot, dtype=np.float64)
@@ -57,7 +60,12 @@ def plan_spherical_segment(start, end, pivot, frames: int) -> torch.Tensor:
     else:
         directions = (np.sin((1 - progress) * angle)[:, None] * ua
                       + np.sin(progress * angle)[:, None] * ub) / np.sin(angle)
-    radii = (1 - progress) * ra + progress * rb
+    # Negative values move toward the target; positive values pull away.
+    # A zero-slope envelope at the endpoints keeps each photographed pose exact.
+    radii = ((1 - progress) * ra + progress * rb
+             + ra * dolly_fraction * np.sin(np.pi * progress) ** 2)
+    if np.any(radii <= 0):
+        raise ValueError('Dolly moves the camera through the target')
     c2w = np.repeat(np.eye(4)[None], len(progress), axis=0)
     c2w[:, :3, 3] = center + directions * radii[:, None]
     c2w[:, :3, :3] = Slerp([0, 1], Rotation.from_matrix(np.stack([a[:3, :3], b[:3, :3]])))(progress).as_matrix()
@@ -65,7 +73,7 @@ def plan_spherical_segment(start, end, pivot, frames: int) -> torch.Tensor:
     # First make camera translation uniform. Then aim every interior pose at
     # the same pivot; interpolating only endpoint rotations lets the target
     # drift across the image as the camera travels around the sphere.
-    sampled = affine_inverse(resample_constant_speed(c2w, frames)).numpy()
+    sampled = affine_inverse(resample_constant_speed(c2w, frames, ease_ends=True)).numpy()
     base = Rotation.from_matrix(sampled[:, :3, :3])
     world_up = -(a[:3, 1] + b[:3, 1])
     if np.linalg.norm(world_up) < 1e-6:
@@ -229,8 +237,12 @@ def main(argv=None, *, da3_cache=None, video_cache=None):
         center_crop=args.center_crop, depth_scale=args.pivot_depth_scale)
         for i in range(3)]
     pivot = torch.stack(pivots).median(dim=0).values
-    specs = [('left_middle_orbit', 0, 1, 'spherical_orbit'),
-             ('middle_right_orbit', 1, 2, 'spherical_orbit')]
+    # Each turnaround visits a real photographed pose. Decelerating at those
+    # reversals avoids an instantaneous change in velocity in the joined film.
+    specs = [('middle_left_push', 1, 0, -0.16),
+             ('left_middle_pull', 0, 1, 0.18),
+             ('middle_right_push', 1, 2, -0.16),
+             ('right_middle_pull', 2, 1, 0.18)]
     metadata = {'images': [str(x) for x in images], 'pivot_world': pivot.tolist(),
                 'frames_per_clip': args.frames, 'fps': args.fps,
                 'generation_resolution_hw': list(generation_hw),
@@ -239,11 +251,12 @@ def main(argv=None, *, da3_cache=None, video_cache=None):
     # guidance to generation_hw, avoiding 81 high-res render frames in GPU memory.
     output_hw = None
     commands = []
-    for name, start, end, trajectory_type in specs:
+    for segment_index, (name, start, end, dolly_fraction) in enumerate(specs):
         folder = args.output_dir / name
         folder.mkdir(parents=True, exist_ok=True)
         poses = plan_spherical_segment(prediction.extrinsics[start],
-                                       prediction.extrinsics[end], pivot, args.frames)
+                                       prediction.extrinsics[end], pivot, args.frames,
+                                       dolly_fraction)
         rgb, depth, valid = render_orbit(prediction, poses, output_hw=output_hw,
             chunk_size=args.chunk_size, alpha_threshold=args.alpha_threshold,
             source_view_index=start)
@@ -255,7 +268,8 @@ def main(argv=None, *, da3_cache=None, video_cache=None):
         np.savez_compressed(folder / 'camera_trajectory.npz', extrinsics=poses.numpy(),
             pivot_world=pivot.numpy(), rendered_depth=depth.float().cpu().numpy())
         metadata['segments'].append({'name': name, 'start': str(images[start]),
-            'end': str(images[end]), 'trajectory_type': trajectory_type,
+            'end': str(images[end]), 'trajectory_type': 'spherical_dolly',
+            'dolly_fraction': dolly_fraction,
             'minimum_valid_fraction': float(valid.float().mean(dim=(1,2)).min())})
         if args.render_only:
             continue
@@ -268,7 +282,7 @@ def main(argv=None, *, da3_cache=None, video_cache=None):
             '--output', str(folder / 'generated.mp4'), '--frames', str(args.frames),
             '--fps', str(args.fps), '--steps', str(args.steps),
             '--guidance-scale', str(args.guidance_scale),
-            '--lora-weight', str(args.lora_weight), '--seed', str(args.seed + start),
+            '--lora-weight', str(args.lora_weight), '--seed', str(args.seed + segment_index),
             '--device', args.device]
         command += ['--height', str(generation_hw[0]), '--width', str(generation_hw[1])]
         commands.append(command)
