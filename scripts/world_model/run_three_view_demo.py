@@ -70,36 +70,9 @@ def plan_spherical_segment(start, end, pivot, frames: int, dolly_fraction: float
     c2w[:, :3, 3] = center + directions * radii[:, None]
     c2w[:, :3, :3] = Slerp([0, 1], Rotation.from_matrix(np.stack([a[:3, :3], b[:3, :3]])))(progress).as_matrix()
     c2w[0], c2w[-1] = a, b
-    # First make camera translation uniform. Then aim every interior pose at
-    # the same pivot; interpolating only endpoint rotations lets the target
-    # drift across the image as the camera travels around the sphere.
-    sampled = affine_inverse(resample_constant_speed(c2w, frames, ease_ends=True)).numpy()
-    base = Rotation.from_matrix(sampled[:, :3, :3])
-    world_up = -(a[:3, 1] + b[:3, 1])
-    if np.linalg.norm(world_up) < 1e-6:
-        world_up = -a[:3, 1]
-    world_up /= np.linalg.norm(world_up)
-    look_rotations = []
-    for position in sampled[:, :3, 3]:
-        forward = center - position
-        forward /= np.linalg.norm(forward)
-        right = np.cross(forward, world_up)
-        if np.linalg.norm(right) < 1e-6:
-            # Keep a consistent horizon even if the orbit approaches the pole.
-            right = a[:3, 0] - forward * np.dot(a[:3, 0], forward)
-        right /= np.linalg.norm(right)
-        down = np.cross(forward, right)
-        look_rotations.append(np.column_stack((right, down, forward)))
-    look = Rotation.from_matrix(np.stack(look_rotations))
-    t = np.linspace(0.0, 1.0, frames)
-    # Ramp the correction near each endpoint so the photos retain their DA3
-    # pose and the transition into target tracking has no sudden angular jump.
-    ramp = np.clip(np.minimum(t, 1 - t) / 0.15, 0, 1)
-    strength = ramp * ramp * (3 - 2 * ramp)
-    correction = (base.inv() * look).as_rotvec() * strength[:, None]
-    sampled[:, :3, :3] = (base * Rotation.from_rotvec(correction)).as_matrix()
-    sampled[0], sampled[-1] = a, b
-    return affine_inverse(torch.from_numpy(sampled).float())
+    # Interpolate only between the photographed orientations. A separate
+    # look-at correction near the endpoints caused visible camera swivels.
+    return resample_constant_speed(c2w, frames, ease_ends=True)
 
 
 def join_original_clips(paths: list[Path], output: Path) -> None:
