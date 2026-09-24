@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--video-lora",
         type=Path,
-        default=DEFAULT_VIDEO_MODEL / "33000_lora.safetensors",
+        default=DEFAULT_VIDEO_MODEL / "12000_lora.safetensors",
     )
     parser.add_argument(
         "--output-dir",
