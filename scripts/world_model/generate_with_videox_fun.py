@@ -25,7 +25,7 @@ DEFAULT_WORLD_ROOT = Path("/home/z00566689/dev/mnt/jiang_dev/WorldModel-dev")
 DEFAULT_MODEL_PATH = Path(
     "/home/z00566689/dev/mnt/SingleRecon/Cloud_Models/Wan2.2-Fun-5B-Control"
 )
-DEFAULT_LORA_PATH = DEFAULT_MODEL_PATH / "33000_lora.safetensors"
+DEFAULT_LORA_PATH = DEFAULT_MODEL_PATH / "12000_lora.safetensors"
 REQUIRED_SPATIAL_MULTIPLE = 32
 DEFAULT_NEGATIVE_PROMPT = (
     "色调艳丽，过曝，静态，细节模糊不清，字幕，整体发灰，最差质量，低质量，"
