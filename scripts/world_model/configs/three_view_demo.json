@@ -14,12 +14,8 @@
   "steps": 8,
   "guidance_scale": 0.0,
   "lora_weight": 1.0,
-  "push_fraction": 0.18,
   "height": null,
   "width": null,
-  "lift_fraction": 0.1,
-  "pull_fraction": 0.6,
-  "yaw_degrees": 18.0,
   "short_edge": 1088,
   "long_edge": 1920,
   "process_res": 840

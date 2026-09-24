@@ -33,7 +33,7 @@ DEFAULT_NEGATIVE_PROMPT = (
 )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     geometry_dir = DEFAULT_WORLD_ROOT / "output/task1_orbit_roundtrip_5"
     parser.add_argument("--image", type=Path, default=DEFAULT_WORLD_ROOT / "image.jpg")
@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int)
     parser.add_argument("--width", type=int)
     parser.add_argument("--negative-prompt", default=DEFAULT_NEGATIVE_PROMPT)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def validate_args(args: argparse.Namespace) -> None:
@@ -210,8 +210,7 @@ def expand_and_load_patch_embedding(transformer, state_dict: dict[str, torch.Ten
     return {key: value for key, value in state_dict.items() if not key.startswith("patch_embedding.")}
 
 
-def main() -> None:
-    args = parse_args()
+def generate(args: argparse.Namespace, cache: dict | None = None) -> None:
     validate_args(args)
     configure_videox_fun_import()
 
@@ -257,6 +256,80 @@ def main() -> None:
         f"generation: {width}x{height}"
     )
 
+    cache_key = (str(args.model_path.resolve()), str(args.lora_path.resolve()),
+                 args.lora_weight, args.device, args.dtype, str(args.config.resolve()))
+    if cache is not None and cache.get('key') == cache_key:
+        pipeline, transformer, use_control_mask = cache['loaded']
+    else:
+        pipeline, transformer, use_control_mask = _load_pipeline(args, config, dtype)
+        if cache is not None:
+            cache.clear()
+            cache.update(key=cache_key, loaded=(pipeline, transformer, use_control_mask))
+
+    prompt = args.prompt.read_text(encoding="utf-8").strip()
+    start_image = Image.open(args.image).convert("RGB")
+    end_image_path = (
+        None if args.no_end_image else (args.end_image if args.end_image is not None else args.image)
+    )
+    end_image = None if end_image_path is None else Image.open(end_image_path).convert("RGB")
+    inpaint_video, inpaint_mask, _ = get_image_to_video_latent(
+        [start_image], None if end_image is None else [end_image],
+        video_length=args.frames, sample_size=[height, width],
+    )
+    control_video, _, _, _ = get_video_to_video_latent(
+        str(args.control_video), video_length=args.frames,
+        sample_size=[height, width], fps=args.fps, ref_image=None,
+    )
+    control_mask = (load_missing_region_mask(args.control_mask, args.frames, height, width)
+                    if use_control_mask else None)
+    reference_image_path = args.reference_image if args.reference_image is not None else args.image
+    reference_image = None
+    if not args.disable_reference_image:
+        if not transformer.config.get("add_ref_conv", False) or transformer.ref_conv is None:
+            raise RuntimeError("Reference conditioning requires add_ref_conv; use --disable-reference-image for ablation")
+        reference_image = get_image_latent(str(reference_image_path), sample_size=[height, width])
+        print(f"Reference conditioning: {reference_image_path}")
+    else:
+        print("Reference conditioning disabled")
+    generator = torch.Generator(device=args.device).manual_seed(args.seed)
+    boundary = config.transformer_additional_kwargs.get("boundary", 0.875)
+    with torch.inference_mode():
+        sample = pipeline(
+            prompt, num_frames=args.frames, negative_prompt=args.negative_prompt,
+            height=height, width=width, generator=generator,
+            guidance_scale=args.guidance_scale, num_inference_steps=args.steps,
+            video=inpaint_video, mask_video=inpaint_mask, control_video=control_video,
+            control_mask=control_mask, ref_image=reference_image,
+            boundary=boundary, shift=args.shift,
+        ).videos
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    save_videos_grid(sample.cpu(), str(args.output), fps=args.fps)
+    metadata = {
+        "image": str(args.image), "end_image": None if end_image_path is None else str(end_image_path),
+        "reference_image": None if args.disable_reference_image else str(reference_image_path),
+        "reference_branch": "disabled" if args.disable_reference_image else "vae_latent_ref_conv",
+        "prompt_file": str(args.prompt), "control_video": str(args.control_video),
+        "control_mask": str(args.control_mask), "model_path": str(args.model_path),
+        "lora_path": str(args.lora_path), "videox_fun_root": str(VENDORED_VIDEOX_FUN_ROOT),
+        "videox_fun_upstream_commit": "18b9b78d85b69edf483e9eeebaa057b39716aba1",
+        "output": str(args.output), "frames": args.frames, "resolution": [height, width],
+        "steps": args.steps, "guidance_scale": args.guidance_scale,
+        "lora_weight": args.lora_weight, "seed": args.seed,
+        "endpoint_constraint": "known start image only" if end_image_path is None else "known start and end images",
+        "control_mask_used": use_control_mask,
+        "control_mask_convention": "1 = missing DA3 geometry, 0 = valid geometry",
+        "memory_mode": "model_full_load",
+    }
+    args.output.with_suffix(".json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"Done. Generated video: {args.output}")
+
+
+def _load_pipeline(args, config, dtype):
+    from videox_fun.models import (AutoencoderKLWan, AutoencoderKLWan3_8,
+                                   Wan2_2Transformer3DModel, WanT5EncoderModel)
+    from videox_fun.pipeline import Wan2_2FunControlPipeline
+    from videox_fun.utils.lora_utils import merge_lora
+    from videox_fun.utils.utils import filter_kwargs
     transformer_subpath = config.transformer_additional_kwargs.get(
         "transformer_low_noise_model_subpath", "transformer"
     )
@@ -325,112 +398,11 @@ def main() -> None:
     )
     pipeline.to(device=args.device)
     print("VideoX-Fun loaded in model_full_load mode")
+    return pipeline, transformer, use_control_mask
 
-    prompt = args.prompt.read_text(encoding="utf-8").strip()
-    start_image = Image.open(args.image).convert("RGB")
-    end_image_path = (
-        None
-        if args.no_end_image
-        else (args.end_image if args.end_image is not None else args.image)
-    )
-    end_image = (
-        None if end_image_path is None else Image.open(end_image_path).convert("RGB")
-    )
-    inpaint_video, inpaint_mask, _ = get_image_to_video_latent(
-        [start_image],
-        None if end_image is None else [end_image],
-        video_length=args.frames,
-        sample_size=[height, width],
-    )
-    control_video, _, _, _ = get_video_to_video_latent(
-        str(args.control_video),
-        video_length=args.frames,
-        sample_size=[height, width],
-        fps=args.fps,
-        ref_image=None,
-    )
-    control_mask = (
-        load_missing_region_mask(args.control_mask, args.frames, height, width)
-        if use_control_mask else None
-    )
-    reference_image_path = (
-        args.reference_image if args.reference_image is not None else args.image
-    )
-    reference_image = None
-    if not args.disable_reference_image:
-        if not transformer.config.get("add_ref_conv", False) or transformer.ref_conv is None:
-            raise RuntimeError(
-                "Reference conditioning was requested, but this transformer does not "
-                "enable add_ref_conv. Check the model config and use the "
-                "Wan2.2-Fun-5B-Control checkpoint, or pass --disable-reference-image "
-                "for an explicit ablation."
-            )
-        reference_image = get_image_latent(
-            str(reference_image_path), sample_size=[height, width]
-        )
-        print(f"Reference conditioning: {reference_image_path}")
-    else:
-        print("Reference conditioning disabled")
-    generator = torch.Generator(device=args.device).manual_seed(args.seed)
-    boundary = config.transformer_additional_kwargs.get("boundary", 0.875)
 
-    with torch.inference_mode():
-        sample = pipeline(
-            prompt,
-            num_frames=args.frames,
-            negative_prompt=args.negative_prompt,
-            height=height,
-            width=width,
-            generator=generator,
-            guidance_scale=args.guidance_scale,
-            num_inference_steps=args.steps,
-            video=inpaint_video,
-            mask_video=inpaint_mask,
-            control_video=control_video,
-            control_mask=control_mask,
-            ref_image=reference_image,
-            boundary=boundary,
-            shift=args.shift,
-        ).videos
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    save_videos_grid(sample.cpu(), str(args.output), fps=args.fps)
-    metadata = {
-        "image": str(args.image),
-        "end_image": None if end_image_path is None else str(end_image_path),
-        "reference_image": (
-            None if args.disable_reference_image else str(reference_image_path)
-        ),
-        "reference_branch": (
-            "disabled" if args.disable_reference_image else "vae_latent_ref_conv"
-        ),
-        "prompt_file": str(args.prompt),
-        "control_video": str(args.control_video),
-        "control_mask": str(args.control_mask),
-        "model_path": str(args.model_path),
-        "lora_path": str(args.lora_path),
-        "videox_fun_root": str(VENDORED_VIDEOX_FUN_ROOT),
-        "videox_fun_upstream_commit": "18b9b78d85b69edf483e9eeebaa057b39716aba1",
-        "output": str(args.output),
-        "frames": args.frames,
-        "resolution": [height, width],
-        "steps": args.steps,
-        "guidance_scale": args.guidance_scale,
-        "lora_weight": args.lora_weight,
-        "seed": args.seed,
-        "endpoint_constraint": (
-            "known start image only"
-            if end_image_path is None
-            else "known start and end images"
-        ),
-        "control_mask_used": use_control_mask,
-        "control_mask_convention": "1 = missing DA3 geometry, 0 = valid geometry",
-        "memory_mode": "model_full_load",
-    }
-    args.output.with_suffix(".json").write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    print(f"Done. Generated video: {args.output}")
+def main() -> None:
+    generate(parse_args())
 
 
 if __name__ == "__main__":

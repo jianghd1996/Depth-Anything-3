@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import random
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,13 +35,7 @@ def parse_args():
 def case_options(name: str, batch_seed: int) -> dict:
     digest = hashlib.sha256(f'{batch_seed}:{name}'.encode('utf-8')).digest()
     rng = random.Random(int.from_bytes(digest[:8], 'big'))
-    return {
-        'seed': rng.randrange(2**31),
-        'push_fraction': round(rng.uniform(0.14, 0.23), 3),
-        'lift_fraction': round(rng.uniform(0.07, 0.13), 3),
-        'pull_fraction': round(rng.uniform(0.52, 0.68), 3),
-        'yaw_degrees': round(rng.uniform(14, 24), 2),
-    }
+    return {'seed': rng.randrange(2**31)}
 
 
 def main():
@@ -69,6 +62,8 @@ def main():
     batch_output.mkdir(parents=True, exist_ok=False)
     print(f'Batch output: {batch_output}', flush=True)
     results = []
+    from run_three_view_demo import main as run_case
+    da3_cache, video_cache = {}, {}
     for index, case in enumerate(cases, 1):
         destination = batch_output / case.name
         destination.mkdir(parents=True, exist_ok=False)
@@ -89,9 +84,16 @@ def main():
         if args.render_only:
             command.append('--render-only')
         print(f'[{index}/{len(cases)}] Running {case.name}: {options}', flush=True)
-        result = subprocess.run(command, check=False)
-        entry['status'] = 'ok' if result.returncode == 0 else 'failed'
-        entry['returncode'] = result.returncode
+        try:
+            run_case(command[2:], da3_cache=da3_cache, video_cache=video_cache)
+            entry['status'] = 'ok'
+            entry['returncode'] = 0
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            entry['status'] = 'failed'
+            entry['returncode'] = 1
+            entry['error'] = str(exc)
         results.append(entry)
         (batch_output / 'batch_summary.json').write_text(
             json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
