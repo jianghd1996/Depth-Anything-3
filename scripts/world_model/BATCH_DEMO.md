@@ -12,4 +12,4 @@ Each run creates a new, timestamped directory: `/home/z00566689/dev/mnt/jiang_de
 
 The runner uses `<case>/prompt.txt` if present. Otherwise, it writes an object-preserving prompt derived from the case folder name into the output case folder. Per-case randomness is reproducible from `--batch-seed 42`: push 0.14–0.23, lift 0.07–0.13, pull 0.52–0.68, and yaw 14–24 degrees. To preview just one case's geometry, append `--render-only --limit 1`. Change `--batch-root` or `--output-root` for other datasets.
 
-Generation uses `guidance_scale=0` and 1080P-class output per case: 1920×1088 pixels for landscape or 1088×1920 for portrait. The DA3 geometry guide is rendered at its reconstructed resolution and resized for VideoX-Fun, limiting GPU memory use.
+Generation uses `guidance_scale=0` and 1080P-class output per case: 1920×1088 pixels for landscape or 1088×1920 for portrait. DA3 uses `process_res=840`; its geometry guide is rendered at that reconstructed resolution and resized for VideoX-Fun, limiting GPU memory use.
