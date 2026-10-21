@@ -38,16 +38,32 @@ class run_DA3:
         if not images:
             raise FileNotFoundError(f"No JPG or PNG images in {img_path}")
 
+        video_path = Path(gs_render_vid_path)
+        export_root = video_path.parent
+        export_root.mkdir(parents=True, exist_ok=True)
+        if video_path.exists() and video_path.is_dir():
+            raise IsADirectoryError(f"Expected MP4 file, found directory: {video_path}")
         self.model.to(device=self.device)
         try:
             prediction = self.model.inference(
                 images,
-                export_dir=gs_render_vid_path,
+                export_dir=str(export_root),
+                export_kwargs={"gs_video": {
+                    "trj_mode": "original",
+                    "vis_depth": None,
+                    "output_name": "da3_original_views",
+                }},
                 infer_gs=True,
                 export_format="gs_video",
                 use_ray_pose=True,
                 process_res=840,
             )
+
+            rendered = export_root / "gs_video" / "da3_original_views.mp4"
+            if not rendered.is_file():
+                raise FileNotFoundError(f"Missing rendered GS video: {rendered}")
+            rendered.replace(video_path)
+            print(f"[DA3 GS VIDEO] {video_path}", flush=True)
 
             # This version of DA3 returns Prediction, not (prediction, render_infos).
             # Do not silently substitute a different COLMAP exporter: the legacy
