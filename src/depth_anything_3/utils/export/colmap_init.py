@@ -17,6 +17,15 @@ def save_sparserecon(prediction, image_paths, output_dir, *,
         raise ValueError("DA3 did not predict camera poses/intrinsics")
     if prediction.depth is None or prediction.processed_images is None:
         raise ValueError("DA3 depth and processed images are required for points")
+    sf = prediction.scale_factor
+    print(
+        f"[DA3 COLMAP SCALE] is_metric={prediction.is_metric} "
+        f"scale_factor={sf} "
+        f"inverse_scale={1.0 / float(sf) if sf is not None and float(sf) != 0 else None} "
+        f"export_pose_scale=1.0 (unchanged) "
+        f"depth_median={float(np.nanmedian(prediction.depth)):.9g}",
+        flush=True,
+    )
     n, h, w = prediction.depth.shape
     if len(image_paths) != n:
         raise ValueError(f"Expected {n} image paths, got {len(image_paths)}")
