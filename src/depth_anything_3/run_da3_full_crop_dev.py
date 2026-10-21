@@ -1,0 +1,70 @@
+"""Legacy-compatible DA3 runner for the reconstruction pipeline.
+
+The custom save_sparserecon function and legacy render_infos return value are
+not present in the upstream DA3 API. Supply a compatible save callback once
+that implementation is available.
+"""
+from __future__ import annotations
+
+import glob
+import os
+from pathlib import Path
+
+import torch
+
+from depth_anything_3.api import DepthAnything3
+
+
+class run_DA3:
+    """Keep the original run_DA3(model_path, device).infer(args) entry point."""
+
+    def __init__(self, model_path, device=torch.device("cuda")):
+        self.model = DepthAnything3(model_name="da3nested-giant-large")
+        state_dicts = torch.load(model_path, map_location="cpu", weights_only=False)
+        self.model.load_state_dict(state_dicts["model"], strict=False)
+        del state_dicts
+        self.model.to("cpu")
+        self.device = torch.device(device)
+
+    def infer(self, args):
+        colmap_path = args.colmap_path
+        img_path = args.data_path
+        gs_render_vid_path = args.gs_render_vid_path
+        extra_view = args.extra_view  # Reserved for legacy sparse reconstruction.
+
+        images = sorted(glob.glob(os.path.join(img_path, "*.jpg")))
+        if not images:
+            images = sorted(glob.glob(os.path.join(img_path, "*.png")))
+        if not images:
+            raise FileNotFoundError(f"No JPG or PNG images in {img_path}")
+
+        self.model.to(device=self.device)
+        try:
+            prediction = self.model.inference(
+                images,
+                export_dir=gs_render_vid_path,
+                infer_gs=True,
+                export_format="gs_video",
+                use_ray_pose=True,
+                process_res=840,
+            )
+
+            # This version of DA3 returns Prediction, not (prediction, render_infos).
+            # Do not silently substitute a different COLMAP exporter: the legacy
+            # save_sparserecon(prediction, render_infos, images, colmap_path)
+            # implementation is still needed for functional parity.
+            save_callback = getattr(args, "save_sparserecon", None)
+            if save_callback is None:
+                raise NotImplementedError(
+                    "DA3 inference completed, but legacy save_sparserecon and "
+                    "render_infos are not yet integrated. Pass args.save_sparserecon "
+                    "after porting the legacy implementation."
+                )
+            render_infos = getattr(args, "render_infos", None)
+            return save_callback(prediction, render_infos, images, colmap_path)
+        finally:
+            if self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
+            self.model.to("cpu")
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
