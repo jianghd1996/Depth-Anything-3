@@ -63,6 +63,19 @@ class run_DA3:
             rendered.replace(video_path)
             print(f"[DA3 GS VIDEO] {video_path}", flush=True)
 
+            import numpy as np
+            sf = prediction.scale_factor
+            ext = np.asarray(prediction.extrinsics)
+            centers = -np.einsum("nij,nj->ni", np.swapaxes(ext[:, :3, :3], 1, 2), ext[:, :3, 3])
+            span = float(np.linalg.norm(np.percentile(centers, 95, axis=0) - np.percentile(centers, 5, axis=0)))
+            print(
+                f"[DA3 SCALE DIAG] is_metric={prediction.is_metric} "
+                f"scale_factor={sf} inv_scale_factor={1.0 / float(sf) if sf is not None and float(sf) != 0 else None} "
+                f"camera_center_p05_p95_diagonal={span:.9g} "
+                f"depth_median={float(np.nanmedian(prediction.depth)):.9g} "
+                f"gs_means_shape={tuple(prediction.gaussians.means.shape) if prediction.gaussians is not None else None}",
+                flush=True,
+            )
             from depth_anything_3.utils.export.colmap_init import save_sparserecon
             return save_sparserecon(prediction, images, colmap_path)
         finally:
