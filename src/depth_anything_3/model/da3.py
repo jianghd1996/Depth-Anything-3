@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 import torch.nn as nn
 from addict import Dict
@@ -362,13 +364,17 @@ class NestedDepthAnything3Net(nn.Module):
         output = self.da3(
             x, extrinsics, intrinsics, export_feat_layers=export_feat_layers, infer_gs=infer_gs, use_ray_pose=use_ray_pose, ref_view_strategy=ref_view_strategy
         )
-        metric_output = self.da3_metric(x)
+        # Diagnostic switch: reproduce the legacy branch without metric-depth
+        # alignment or sky replacement. Default preserves upstream behavior.
+        if os.environ.get("DA3_DISABLE_METRIC_POSTPROCESS", "0") == "1":
+            print("[DA3 METRIC POSTPROCESS] disabled (legacy ablation)", flush=True)
+            return output
 
-        # Apply metric scaling and alignment
+        metric_output = self.da3_metric(x)
         output = self._apply_metric_scaling(output, metric_output)
         output = self._apply_depth_alignment(output, metric_output)
         output = self._handle_sky_regions(output, metric_output)
-
+        print("[DA3 METRIC POSTPROCESS] enabled", flush=True)
         return output
 
     def _apply_metric_scaling(
