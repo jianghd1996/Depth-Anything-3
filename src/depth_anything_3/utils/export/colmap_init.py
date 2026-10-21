@@ -35,6 +35,7 @@ def save_sparserecon(prediction, image_paths, output_dir, *,
         k = np.array(prediction.intrinsics[idx], dtype=np.float64, copy=True)
         k[0, :] *= orig_w / w
         k[1, :] *= orig_h / h
+        k[2, 2] = 1.0
         cam = pycolmap.Camera(
             model="PINHOLE", width=orig_w, height=orig_h,
             params=[k[0, 0], k[1, 1], k[0, 2], k[1, 2]],
@@ -50,5 +51,8 @@ def save_sparserecon(prediction, image_paths, output_dir, *,
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     recon.write(str(output_dir))
+    recon.write_text(str(output_dir))
+    import trimesh
+    trimesh.PointCloud(points, colors=colors).export(str(output_dir / "points3D.ply"))
     print(f"[DA3 COLMAP] {n} images, {len(points)} points -> {output_dir}", flush=True)
     return recon
