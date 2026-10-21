@@ -71,12 +71,13 @@ class PersistentDA3:
         timings["transfer"] = time.perf_counter() - transfer_start
 
         forward_start = time.perf_counter()
-        raw = self.model.forward(
+        with torch.inference_mode():
+            raw = self.model.forward(
             imgs, ex_t_norm, in_t,
-            [], kwargs.pop("infer_gs", False),
-            kwargs.pop("use_ray_pose", False),
-            kwargs.pop("ref_view_strategy", "saddle_balanced"),
-        )
+                [], kwargs.pop("infer_gs", False),
+                kwargs.pop("use_ray_pose", False),
+                kwargs.pop("ref_view_strategy", "saddle_balanced"),
+            )
         _synchronize(self.model)
         timings["forward"] = time.perf_counter() - forward_start
 
