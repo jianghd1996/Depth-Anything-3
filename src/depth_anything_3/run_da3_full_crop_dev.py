@@ -1,8 +1,6 @@
 """Legacy-compatible DA3 runner for the reconstruction pipeline.
 
-The custom save_sparserecon function and legacy render_infos return value are
-not present in the upstream DA3 API. Supply a compatible save callback once
-that implementation is available.
+Exports original-view Gaussian video and no-track COLMAP initialization.
 """
 from __future__ import annotations
 
@@ -65,19 +63,8 @@ class run_DA3:
             rendered.replace(video_path)
             print(f"[DA3 GS VIDEO] {video_path}", flush=True)
 
-            # This version of DA3 returns Prediction, not (prediction, render_infos).
-            # Do not silently substitute a different COLMAP exporter: the legacy
-            # save_sparserecon(prediction, render_infos, images, colmap_path)
-            # implementation is still needed for functional parity.
-            save_callback = getattr(args, "save_sparserecon", None)
-            if save_callback is None:
-                raise NotImplementedError(
-                    "DA3 inference completed, but legacy save_sparserecon and "
-                    "render_infos are not yet integrated. Pass args.save_sparserecon "
-                    "after porting the legacy implementation."
-                )
-            render_infos = getattr(args, "render_infos", None)
-            return save_callback(prediction, render_infos, images, colmap_path)
+            from depth_anything_3.utils.export.colmap_init import save_sparserecon
+            return save_sparserecon(prediction, images, colmap_path)
         finally:
             if self.device.type == "cuda":
                 torch.cuda.synchronize(self.device)
