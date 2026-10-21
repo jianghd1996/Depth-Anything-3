@@ -7,7 +7,7 @@ from depth_anything_3.utils.export.glb import _depths_to_world_points_with_color
 
 
 def save_sparserecon(prediction, image_paths, output_dir, *,
-                     conf_percentile=40.0, max_points=300000):
+                     conf_percentile=40.0, max_points=1000000):
     """Save input-view poses and depth-derived colored points to COLMAP.
 
     No novel views, 2D observations, or tracks are generated. Suitable as
